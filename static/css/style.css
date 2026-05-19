@@ -1,0 +1,405 @@
+/* ── Theme Variables ────────────────────────────── */
+:root,
+[data-theme="light"] {
+  --bg: #ffffff;
+  --bg-card: #ffffff;
+  --bg-muted: #f8f9fa;
+  --text: #1a1b1e;
+  --text-secondary: #70778c;
+  --text-muted: #909296;
+  --border: #dee2e6;
+  --green: #059669;
+  --green-bg: #3bd671;
+  --red: #b91c1c;
+  --red-bg: #df484a;
+  --orange: #f29030;
+  --gray: #adb5bd;
+  --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+  --radius: 8px;
+  --accent: #228be6;
+  --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+[data-theme="dark"] {
+  --bg: #1a1b1e;
+  --bg-card: #25262b;
+  --bg-muted: #2c2e33;
+  --text: #c1c2c5;
+  --text-secondary: #909296;
+  --text-muted: #70778c;
+  --border: #373a40;
+  --green: #3bd671;
+  --green-bg: #2b8a3e;
+  --red: #df484a;
+  --red-bg: #c92a2a;
+  --orange: #f29030;
+  --gray: #5c5f66;
+  --shadow: 0 1px 3px rgba(0,0,0,0.3);
+  --accent: #4dabf7;
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-theme="auto"] {
+    --bg: #1a1b1e;
+    --bg-card: #25262b;
+    --bg-muted: #2c2e33;
+    --text: #c1c2c5;
+    --text-secondary: #909296;
+    --text-muted: #70778c;
+    --border: #373a40;
+    --green: #3bd671;
+    --green-bg: #2b8a3e;
+    --red: #df484a;
+    --red-bg: #c92a2a;
+    --orange: #f29030;
+    --gray: #5c5f66;
+    --shadow: 0 1px 3px rgba(0,0,0,0.3);
+    --accent: #4dabf7;
+  }
+}
+
+/* ── Reset ─────────────────────────────────────── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.6;
+  min-height: 100vh;
+  transition: background 0.2s, color 0.2s;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+/* ── Header / Nav ──────────────────────────────── */
+#header {
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+  position: sticky;
+  top: 0;
+  z-index: 100;
+}
+
+.nav-bar {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 12px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.nav-brand {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--text) !important;
+  text-decoration: none !important;
+}
+
+.nav-links {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.nav-links a {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: color 0.15s;
+}
+.nav-links a:hover,
+.nav-links a.active {
+  color: var(--accent);
+  text-decoration: none;
+}
+.nav-links a.highlight {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* ── Main Content ──────────────────────────────── */
+#main-content {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+/* ── Overall Status ────────────────────────────── */
+.overall-status {
+  text-align: center;
+  padding: 32px 0 16px;
+}
+
+.overall-icon {
+  width: 64px;
+  height: 64px;
+  margin: 0 auto;
+}
+
+.status-title {
+  font-size: 1.6rem;
+  font-weight: 700;
+  margin-top: 12px;
+}
+
+.status-subtitle {
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  margin-top: 4px;
+}
+
+/* ── Maintenance Alert ─────────────────────────── */
+.maintenance-alert {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  margin: 12px auto;
+  font-size: 0.9rem;
+  align-items: flex-start;
+}
+.maintenance-alert.yellow {
+  background: #fff3bf;
+  color: #5c4400;
+}
+.maintenance-alert.gray {
+  background: var(--bg-muted);
+  color: var(--text-secondary);
+}
+.maintenance-alert.blue {
+  background: #d0ebff;
+  color: #1c3d5a;
+}
+[data-theme="dark"] .maintenance-alert.yellow {
+  background: #3d3100;
+  color: #ffd43b;
+}
+[data-theme="dark"] .maintenance-alert.blue {
+  background: #0a2740;
+  color: #74c0fc;
+}
+.maintenance-alert-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.maintenance-alert-title {
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+.maintenance-alert-body {
+  white-space: pre-line;
+}
+.maintenance-alert-meta {
+  font-size: 0.8rem;
+  opacity: 0.8;
+  margin-top: 4px;
+}
+
+/* ── Monitor Card ──────────────────────────────── */
+.monitor-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 20px;
+  margin-top: 12px;
+  box-shadow: var(--shadow);
+}
+
+.monitor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.monitor-name {
+  font-weight: 700;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.monitor-status-icon {
+  width: 1.2em;
+  height: 1.2em;
+}
+
+.monitor-uptime {
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+/* ── Uptime Bar (90 days) ──────────────────────── */
+.uptime-bars {
+  display: flex;
+  gap: 2px;
+  margin: 10px 0 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.uptime-bar {
+  width: 7px;
+  height: 20px;
+  border-radius: 2px;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.15s;
+}
+.uptime-bar:hover {
+  opacity: 0.7;
+}
+
+/* ── Latency Chart ─────────────────────────────── */
+.chart-container {
+  height: 150px;
+  margin-top: 8px;
+  position: relative;
+}
+.chart-container canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* ── Incidents Page ────────────────────────────── */
+.incidents-controls {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 16px;
+}
+
+.month-select {
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  max-width: 300px;
+}
+
+.incidents-nav {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 16px;
+}
+
+.btn {
+  background: var(--bg-card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: background 0.15s;
+}
+.btn:hover {
+  background: var(--bg-muted);
+}
+
+/* ── Footer ────────────────────────────────────── */
+.footer {
+  text-align: center;
+  padding: 24px;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  border-top: 1px solid var(--border);
+  margin-top: 40px;
+}
+
+/* ── Tooltip ───────────────────────────────────── */
+.tooltip {
+  position: relative;
+}
+.tooltip-text {
+  visibility: hidden;
+  opacity: 0;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--text);
+  color: var(--bg);
+  font-size: 0.75rem;
+  padding: 6px 10px;
+  border-radius: 4px;
+  white-space: nowrap;
+  z-index: 200;
+  transition: opacity 0.15s;
+  pointer-events: none;
+  font-weight: 500;
+}
+.tooltip:hover .tooltip-text {
+  visibility: visible;
+  opacity: 1;
+}
+
+/* ── Modal (for incident details) ──────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.modal-content {
+  background: var(--bg-card);
+  border-radius: var(--radius);
+  padding: 24px;
+  max-width: 640px;
+  width: 90%;
+  max-height: 80vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+}
+.modal-title {
+  font-weight: 700;
+  font-size: 1.1rem;
+  margin-bottom: 12px;
+}
+.modal-close {
+  float: right;
+  cursor: pointer;
+  font-size: 1.2rem;
+  color: var(--text-muted);
+}
+.modal-close:hover {
+  color: var(--text);
+}
+
+/* ── Loading / Error / No Data ─────────────────── */
+.empty-state {
+  text-align: center;
+  padding: 40px;
+  color: var(--text-muted);
+}
+
+/* ── Responsive ────────────────────────────────── */
+@media (max-width: 640px) {
+  .monitor-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
+  .uptime-bars {
+    gap: 1px;
+  }
+  .uptime-bar {
+    width: 5px;
+  }
+}

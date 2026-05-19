@@ -1,0 +1,26 @@
+name = "uptime-worker"
+main = "src/index.ts"
+compatibility_date = "2025-04-02"
+compatibility_flags = ["nodejs_compat"]
+
+# Workers Static Assets — 代替 Cloudflare Pages
+assets = { directory = "./static", binding = "ASSETS" }
+
+# 用 D1 存监控状态
+[[d1_databases]]
+binding = "UPTIMEFLARE_D1"
+database_name = "uptimeflare_d1"
+database_id = "4a81c7ae-213a-42b5-aea4-e441160204b9"
+
+# 多地探测用的 Durable Objects
+[[durable_objects.bindings]]
+name = "REMOTE_CHECKER_DO"
+class_name = "RemoteChecker"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RemoteChecker"]
+
+# 每分钟跑一次监控
+[triggers]
+crons = ["* * * * *"]

@@ -1,0 +1,21 @@
+{
+  "name": "uptime-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Serverless uptime monitoring & status page — pure Cloudflare Workers, zero Pages",
+  "scripts": {
+    "dev": "wrangler dev --test-scheduled --persist-to ./.wrangler/state",
+    "deploy": "wrangler deploy",
+    "d1:create": "wrangler d1 create uptimeflare_d1",
+    "d1:init": "wrangler d1 execute uptimeflare_d1 --file=./deploy/init.sql"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250410.0",
+    "esbuild": "0.21.0",
+    "typescript": "^5.0.4",
+    "wrangler": "^4.54.0"
+  },
+  "dependencies": {
+    "p-limit": "^7.2.0"
+  }
+}

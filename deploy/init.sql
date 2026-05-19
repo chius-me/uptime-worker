@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS uptimeflare (
+    key VARCHAR(255) PRIMARY KEY,
+    value BLOB NOT NULL
+);
