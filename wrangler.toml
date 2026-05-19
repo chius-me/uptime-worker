@@ -8,9 +8,9 @@ assets = { directory = "./static", binding = "ASSETS" }
 
 # 用 D1 存监控状态
 [[d1_databases]]
-binding = "UPTIMEFLARE_D1"
-database_name = "uptimeflare_d1"
-database_id = "4a81c7ae-213a-42b5-aea4-e441160204b9"
+binding = "UPTIME_WORKER_D1"
+database_name = "uptime_worker_d1"
+database_id = "97bbb9eb-3d04-4d5e-b66f-918483619a0c"
 
 # 多地探测用的 Durable Objects
 [[durable_objects.bindings]]

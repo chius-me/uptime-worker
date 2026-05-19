@@ -8,7 +8,7 @@ import pLimit from 'p-limit'
 
 export interface Env {
   REMOTE_CHECKER_DO: DurableObjectNamespace<RemoteChecker>
-  UPTIMEFLARE_D1: D1Database
+  UPTIME_WORKER_D1: D1Database
   ASSETS: Fetcher // Workers Static Assets
 }
 
