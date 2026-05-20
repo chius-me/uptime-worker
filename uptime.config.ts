@@ -20,6 +20,16 @@ const workerConfig: WorkerConfig = {
   // Define all your monitors here
   monitors: [
     {
+      id: 'website',
+      name: 'Website',
+      method: 'GET',
+      target: 'https://chius.cc',
+      tooltip: 'Personal website',
+      statusPageLink: 'https://chius.cc',
+      expectedCodes: [200],
+      timeout: 10000,
+    },
+    {
       id: 'blog',
       name: 'Blog',
       method: 'GET',
