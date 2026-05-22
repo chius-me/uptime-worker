@@ -13,6 +13,7 @@ const pageConfig: PageConfig = {
     { link: 'https://github.com/chius-me/', label: 'GitHub' },
     { link: 'mailto:contact@chius.cc', label: 'Email Me', highlight: true },
   ],
+  logo: '/logo.png',
 }
 
 const workerConfig: WorkerConfig = {
@@ -49,6 +50,16 @@ const workerConfig: WorkerConfig = {
       timeout: 10000,
     },
     {
+      id: 'homelab',
+      name: 'HomeLab',
+      method: 'GET',
+      target: 'https://health.lan.chius.cc',
+      tooltip: 'Proxmox, TrueNAS and so on',
+      statusPageLink: 'https://health.lan.chius.cc',
+      expectedCodes: [200],
+      timeout: 10000,
+    },
+    {
       id: 'vps1',
       name: 'VPS in Qingdao',
       method: 'TCP_PING',
@@ -65,16 +76,6 @@ const workerConfig: WorkerConfig = {
       target: '<VPS2_IP>:<VPS2_PORT>',
       tooltip: 'From AWS',
       timeout: 5000,
-    },
-    {
-      id: 'homelab',
-      name: 'HomeLab',
-      method: 'GET',
-      target: 'https://health.lan.chius.cc',
-      tooltip: 'Proxmox VE & Core Network in HomeLab',
-      statusPageLink: 'https://health.lan.chius.cc',
-      expectedCodes: [200],
-      timeout: 10000,
     },
   ],
   // [Optional] Notification settings

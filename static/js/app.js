@@ -63,9 +63,9 @@ async function render() {
 
   const cfg = apiData.config
   document.getElementById('page-title').textContent = cfg.title || 'UptimeWorker'
-  document.querySelector('.nav-brand').textContent = cfg.logo
-    ? `<img src="${esc(cfg.logo)}" height="24" alt="">`
-    : (cfg.title || 'UptimeWorker')
+  document.querySelector('.nav-brand').innerHTML = cfg.logo
+    ? `<img src="${esc(cfg.logo)}" height="32" alt="Logo" style="vertical-align: middle; margin-right: 8px;"><span>${esc(cfg.title || 'UptimeWorker')}</span>`
+    : esc(cfg.title || 'UptimeWorker')
 
   // Nav links
   const nav = document.getElementById('nav-links')
