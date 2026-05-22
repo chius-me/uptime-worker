@@ -13,7 +13,9 @@ export interface Env {
   TG_BOT_TOKEN?: string
   TG_CHAT_ID?: string
   VPS1_IP?: string
+  VPS1_PORT?: string
   VPS2_IP?: string
+  VPS2_PORT?: string
 }
 
 export default {
@@ -94,8 +96,19 @@ export default {
       if (monitor.target.includes('<VPS1_IP>') && env.VPS1_IP) {
         monitor = { ...monitor, target: monitor.target.replace('<VPS1_IP>', env.VPS1_IP) }
       }
+      if (monitor.target.includes('<VPS1_PORT>') && env.VPS1_PORT) {
+        monitor = { ...monitor, target: monitor.target.replace('<VPS1_PORT>', env.VPS1_PORT) }
+      } else if (monitor.target.includes('<VPS1_PORT>')) {
+        monitor = { ...monitor, target: monitor.target.replace('<VPS1_PORT>', '22') } // default to 22
+      }
+      
       if (monitor.target.includes('<VPS2_IP>') && env.VPS2_IP) {
         monitor = { ...monitor, target: monitor.target.replace('<VPS2_IP>', env.VPS2_IP) }
+      }
+      if (monitor.target.includes('<VPS2_PORT>') && env.VPS2_PORT) {
+        monitor = { ...monitor, target: monitor.target.replace('<VPS2_PORT>', env.VPS2_PORT) }
+      } else if (monitor.target.includes('<VPS2_PORT>')) {
+        monitor = { ...monitor, target: monitor.target.replace('<VPS2_PORT>', '22') } // default to 22
       }
       checkQueue.push(limit(() => doMonitor(monitor, workerLocation, env)))
     }
