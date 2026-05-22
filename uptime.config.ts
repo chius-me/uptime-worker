@@ -66,6 +66,16 @@ const workerConfig: WorkerConfig = {
       tooltip: 'From AWS',
       timeout: 5000,
     },
+    {
+      id: 'homelab',
+      name: 'HomeLab',
+      method: 'GET',
+      target: 'https://health.lan.chius.cc',
+      tooltip: 'Proxmox VE & Core Network in HomeLab',
+      statusPageLink: 'https://health.lan.chius.cc',
+      expectedCodes: [200],
+      timeout: 10000,
+    },
   ],
   // [Optional] Notification settings
   notification: {
