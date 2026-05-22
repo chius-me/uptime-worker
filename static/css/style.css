@@ -246,12 +246,14 @@ a:hover {
   display: flex;
   gap: 2px;
   margin: 10px 0 6px;
-  overflow-x: auto;
+  justify-content: flex-end; /* Align to the right so most recent days are always visible */
   padding-bottom: 2px;
 }
 
 .uptime-bar {
-  width: 7px;
+  flex-grow: 1; /* Allow bars to shrink */
+  min-width: 2px; /* Set a minimum width so they don't disappear */
+  max-width: 7px; /* Keep the original width as maximum */
   height: 20px;
   border-radius: 2px;
   cursor: pointer;
@@ -400,6 +402,15 @@ a:hover {
     gap: 1px;
   }
   .uptime-bar {
-    width: 5px;
+    max-width: 5px;
   }
+}
+
+.footer a {
+  color: var(--text-muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.footer a:hover {
+  color: var(--text-main);
 }

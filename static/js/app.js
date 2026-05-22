@@ -74,7 +74,7 @@ async function render() {
   ).join('\n')
 
   // Footer
-  document.getElementById('footer-text').innerHTML = cfg.customFooter || 'Powered by UptimeWorker'
+  document.getElementById('footer-text').innerHTML = cfg.customFooter || 'Powered by <a href="https://github.com/chius-me/uptime-worker" target="_blank">UptimeWorker</a>. Inspired by <a href="https://github.com/lyc8503/UptimeFlare" target="_blank">UptimeFlare</a> and <a href="https://github.com/louislam/uptime-kuma" target="_blank">Uptime Kuma</a>.'
 
   const route = currentRoute()
   const main = document.getElementById('main-content')
