@@ -53,19 +53,15 @@ function formatStatusChangeNotification(
   const timeIncidentStartFormatted = dateFormatter.format(new Date(timeIncidentStart * 1000))
 
   if (isUp) {
-    return `✅ ${monitor.name} is up! \nThe service is up again after being down for ${downtimeDuration} minutes.`
+    return `🟢 ${monitor.name} is up! \nThe service is up again after being down for ${downtimeDuration} minutes.`
   } else if (timeNow == timeIncidentStart) {
-    return `🔴 ${
-      monitor.name
-    } is currently down. \nService is unavailable at ${timeNowFormatted}. \nIssue: ${
-      reason || 'unspecified'
-    }`
+    return `🔴 ${monitor.name
+      } is currently down. \nService is unavailable at ${timeNowFormatted}. \nIssue: ${reason || 'unspecified'
+      }`
   } else {
-    return `🔴 ${
-      monitor.name
-    } is still down. \nService is unavailable since ${timeIncidentStartFormatted} (${downtimeDuration} minutes). \nIssue: ${
-      reason || 'unspecified'
-    }`
+    return `🔴 ${monitor.name
+      } is still down. \nService is unavailable since ${timeIncidentStartFormatted} (${downtimeDuration} minutes). \nIssue: ${reason || 'unspecified'
+      }`
   }
 }
 
@@ -98,18 +94,18 @@ async function webhookNotify(env: Env, webhook: WebhookConfig, message: string) 
     if (url.includes('<TG_BOT_TOKEN>') && env.TG_BOT_TOKEN) {
       url = url.replace('<TG_BOT_TOKEN>', env.TG_BOT_TOKEN)
     }
-    
+
     let method = webhook.method
     let headers = new Headers(webhook.headers as any)
     let payloadTemplated: { [key: string]: string | number } = JSON.parse(
       JSON.stringify(webhook.payload)
     )
-    
+
     // Replace ENV variables in Payload (e.g., chat id)
     if (payloadTemplated.chat_id === '<TG_CHAT_ID>' && env.TG_CHAT_ID) {
       payloadTemplated.chat_id = env.TG_CHAT_ID
     }
-    
+
     templateWebhookPlayload(payloadTemplated, message)
     let body = undefined
 
