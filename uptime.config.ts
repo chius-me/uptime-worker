@@ -54,7 +54,7 @@ const workerConfig: WorkerConfig = {
       method: 'TCP_PING',
       // 通过 CF Secrets 传入环境变量 <VPS1_IP> 和 <VPS1_PORT>
       target: '<VPS1_IP>:<VPS1_PORT>',
-      tooltip: '监控主要 VPS 节点状态',
+      tooltip: 'From Aliyun',
       timeout: 5000,
     },
     {
@@ -63,16 +63,7 @@ const workerConfig: WorkerConfig = {
       method: 'TCP_PING',
       // 通过 CF Secrets 传入环境变量 <VPS2_IP> 和 <VPS2_PORT>
       target: '<VPS2_IP>:<VPS2_PORT>',
-      tooltip: 'AWS的一个 VPS',
-      timeout: 5000,
-    },
-    {
-      id: 'vps2',
-      name: 'VPS in Tyoko',
-      method: 'TCP_PING',
-      // 通过 CF Secrets 传入环境变量 <VPS2_IP>
-      target: '<VPS2_IP>:5211',
-      tooltip: 'AWS的一个 VPS',
+      tooltip: 'From AWS',
       timeout: 5000,
     },
   ],
