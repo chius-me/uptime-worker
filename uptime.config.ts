@@ -48,6 +48,24 @@ const workerConfig: WorkerConfig = {
       expectedCodes: [200],
       timeout: 10000,
     },
+    {
+      id: 'vps1_ssh',
+      name: 'VPS 1 (HomeLab/Cloud)',
+      method: 'TCP_PING',
+      // 通过 CF Secrets 传入环境变量 <VPS1_IP>
+      target: '<VPS1_IP>:22',
+      tooltip: '监控主要 VPS 节点 SSH 端口状态',
+      timeout: 5000,
+    },
+    {
+      id: 'vps2_ssh',
+      name: 'VPS 2 (Backup)',
+      method: 'TCP_PING',
+      // 通过 CF Secrets 传入环境变量 <VPS2_IP>
+      target: '<VPS2_IP>:22',
+      tooltip: '监控备用 VPS 节点 SSH 端口状态',
+      timeout: 5000,
+    },
   ],
   // [Optional] Notification settings
   notification: {

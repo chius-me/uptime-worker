@@ -12,6 +12,8 @@ export interface Env {
   ASSETS: Fetcher // Workers Static Assets
   TG_BOT_TOKEN?: string
   TG_CHAT_ID?: string
+  VPS1_IP?: string
+  VPS2_IP?: string
 }
 
 export default {
@@ -87,7 +89,14 @@ export default {
     let checkQueue: Promise<CheckResult>[] = []
     let checkResult: Record<string, CheckResult> = {};
     const limit = pLimit(5);
-    for (const monitor of workerConfig.monitors) {
+    for (let monitor of workerConfig.monitors) {
+      // Inject env variables into monitor target
+      if (monitor.target.includes('<VPS1_IP>') && env.VPS1_IP) {
+        monitor = { ...monitor, target: monitor.target.replace('<VPS1_IP>', env.VPS1_IP) }
+      }
+      if (monitor.target.includes('<VPS2_IP>') && env.VPS2_IP) {
+        monitor = { ...monitor, target: monitor.target.replace('<VPS2_IP>', env.VPS2_IP) }
+      }
       checkQueue.push(limit(() => doMonitor(monitor, workerLocation, env)))
     }
     for (const result of await Promise.all(checkQueue)) {
