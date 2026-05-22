@@ -11,7 +11,6 @@ const pageConfig: PageConfig = {
   // Links shown at the header of your status page, could set `highlight` to `true`
   links: [
     { link: 'https://github.com/chius-me/', label: 'GitHub' },
-    { link: 'https://blog.chius.cc', label: 'Blog' },
     { link: 'mailto:contact@chius.cc', label: 'Email Me', highlight: true },
   ],
 }
@@ -41,7 +40,7 @@ const workerConfig: WorkerConfig = {
     },
     {
       id: 'social',
-      name: 'GoToSocial',
+      name: 'Fediverse',
       method: 'GET',
       target: 'https://social.chius.cc',
       tooltip: 'GoToSocial instance',
@@ -51,10 +50,23 @@ const workerConfig: WorkerConfig = {
     },
   ],
   // [Optional] Notification settings
-  // notification: {
-  //   webhook: { ... },
-  //   timeZone: 'Asia/Shanghai',
-  // },
+  notification: {
+    webhook: {
+      // 通过 CF Secrets (环境变量) 获取 Token
+      url: 'https://api.telegram.org/bot<TG_BOT_TOKEN>/sendMessage',
+      method: 'POST',
+      payloadType: 'json',
+      payload: {
+        // 通过 CF Secrets (环境变量) 获取 Chat ID
+        chat_id: '<TG_CHAT_ID>',
+        text: '$MSG',
+      },
+    },
+    // 通知中使用的时区
+    timeZone: 'Asia/Shanghai',
+    // (可选) 宽限期：持续宕机 x 分钟后才会发送通知
+    // gracePeriod: 5,
+  },
 }
 
 // You can define multiple maintenances here

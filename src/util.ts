@@ -1,6 +1,8 @@
 import { MonitorTarget, WebhookConfig } from '../types/config'
 import { maintenances, workerConfig } from '../uptime.config'
 
+import { Env } from './index'
+
 async function getWorkerLocation() {
   const res = await fetch('https://cloudflare.com/cdn-cgi/trace')
   const text = await res.text()
@@ -79,10 +81,10 @@ function templateWebhookPlayload(payload: any, message: string) {
   }
 }
 
-async function webhookNotify(webhook: WebhookConfig, message: string) {
+async function webhookNotify(env: Env, webhook: WebhookConfig, message: string) {
   if (Array.isArray(webhook)) {
     for (const w of webhook) {
-      await webhookNotify(w, message)
+      await webhookNotify(env, w, message)
     }
     return
   }
@@ -92,11 +94,22 @@ async function webhookNotify(webhook: WebhookConfig, message: string) {
   )
   try {
     let url = webhook.url
+    // Replace ENV variables in URL (e.g., telegram bot token)
+    if (url.includes('<TG_BOT_TOKEN>') && env.TG_BOT_TOKEN) {
+      url = url.replace('<TG_BOT_TOKEN>', env.TG_BOT_TOKEN)
+    }
+    
     let method = webhook.method
     let headers = new Headers(webhook.headers as any)
     let payloadTemplated: { [key: string]: string | number } = JSON.parse(
       JSON.stringify(webhook.payload)
     )
+    
+    // Replace ENV variables in Payload (e.g., chat id)
+    if (payloadTemplated.chat_id === '<TG_CHAT_ID>' && env.TG_CHAT_ID) {
+      payloadTemplated.chat_id = env.TG_CHAT_ID
+    }
+    
     templateWebhookPlayload(payloadTemplated, message)
     let body = undefined
 
@@ -148,6 +161,7 @@ async function webhookNotify(webhook: WebhookConfig, message: string) {
 
 // Auxiliary function to format notification and send it via webhook
 const formatAndNotify = async (
+  env: Env,
   monitor: MonitorTarget,
   isUp: boolean,
   timeIncidentStart: number,
@@ -185,7 +199,7 @@ const formatAndNotify = async (
       reason,
       workerConfig.notification?.timeZone ?? 'Etc/GMT'
     )
-    await webhookNotify(workerConfig.notification.webhook, notification)
+    await webhookNotify(env, workerConfig.notification.webhook, notification)
   } else {
     console.log(`Webhook not set, skipping notification for ${monitor.name}`)
   }
