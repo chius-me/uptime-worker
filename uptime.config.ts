@@ -84,7 +84,7 @@ const workerConfig: WorkerConfig = {
     // 通知中使用的时区
     timeZone: 'Asia/Shanghai',
     // (可选) 宽限期：持续宕机 x 分钟后才会发送通知
-    // gracePeriod: 5,
+    gracePeriod: 5,
   },
 }
 
