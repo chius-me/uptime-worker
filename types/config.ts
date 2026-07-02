@@ -1,4 +1,4 @@
-import type { Env } from '../worker/src'
+import type { Env } from '../src'
 
 export type PageConfig = {
   title?: string
