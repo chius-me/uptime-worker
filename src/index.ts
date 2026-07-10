@@ -14,6 +14,8 @@ export interface Env {
   TG_CHAT_ID?: string
   VPS1_IP?: string
   VPS1_PORT?: string
+  HOMELAB_HOST?: string
+  HOMELAB_PORT?: string
 }
 
 export default {

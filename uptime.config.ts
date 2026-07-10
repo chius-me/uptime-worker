@@ -33,7 +33,7 @@ const workerConfig: WorkerConfig = {
       id: 'homelab',
       name: 'HomeLab',
       method: 'TCP_PING',
-      target: 'lan.chius.cc:443',
+      target: '<HOMELAB_HOST>:<HOMELAB_PORT>',
       tooltip: 'HomeLab IPv6 connectivity',
       timeout: 10000,
     },
