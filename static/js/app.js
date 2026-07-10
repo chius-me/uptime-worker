@@ -430,7 +430,7 @@ window.addEventListener('resize', () => {
   resizeTimer = setTimeout(() => {
     if (apiData) render()
   }, 250)
-})
+});
 
 // ── Theme ────────────────────────────────────────
 (function initTheme() {
