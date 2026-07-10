@@ -377,10 +377,6 @@ details.monitor-card summary::-webkit-details-marker {
 }
 
 .monitor-status-icon {
-  width: 1.15em;
-  height: 1.15em;
-}
-.monitor-status-icon {
   display: inline-flex;
   width: 18px;
   height: 18px;

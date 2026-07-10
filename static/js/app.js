@@ -192,7 +192,6 @@ function renderMaintenance(m, upcoming, config) {
     </div>`
 }
 
-// Generated state classes: monitor-status-icon up, monitor-status-icon down, monitor-status-icon unknown.
 function statusIcon(status) {
   const icon = status === 'down' ? ICONS.alert : ICONS.check
   return `<span class="monitor-status-icon ${status}">${icon}</span>`
