@@ -380,6 +380,16 @@ details.monitor-card summary::-webkit-details-marker {
   width: 1.15em;
   height: 1.15em;
 }
+.monitor-status-icon {
+  display: inline-flex;
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+}
+.monitor-status-icon svg { width: 100%; height: 100%; }
+.monitor-status-icon.up { color: var(--green); }
+.monitor-status-icon.down { color: var(--red); }
+.monitor-status-icon.unknown { color: var(--gray); }
 
 .monitor-uptime {
   font-family: var(--font-mono);
@@ -722,4 +732,3 @@ details.monitor-card summary::-webkit-details-marker {
     font-size: 1rem;
   }
 }
-

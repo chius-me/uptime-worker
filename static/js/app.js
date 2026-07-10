@@ -192,15 +192,19 @@ function renderMaintenance(m, upcoming, config) {
     </div>`
 }
 
+// Generated state classes: monitor-status-icon up, monitor-status-icon down, monitor-status-icon unknown.
+function statusIcon(status) {
+  const icon = status === 'down' ? ICONS.alert : ICONS.check
+  return `<span class="monitor-status-icon ${status}">${icon}</span>`
+}
+
 function renderMonitor(mon, monData, state) {
   if (!monData) {
-    return `<div class="monitor-header"><div class="monitor-name">${ICONS.check} ${esc(mon.name)}</div><div class="monitor-uptime">${I18N.t('No data available')}</div></div>`
+    return `<div class="monitor-header"><div class="monitor-name">${statusIcon('unknown')} ${esc(mon.name)}</div><div class="monitor-uptime">${I18N.t('No data available')}</div></div>`
   }
 
   const isUp = monData.up
-  const icon = isUp
-    ? `<span style="color:var(--green)">${ICONS.check}</span>`
-    : `<span style="color:var(--red)">${ICONS.alert}</span>`
+  const icon = statusIcon(isUp ? 'up' : 'down')
 
   const nameHtml = mon.statusPageLink
     ? `<a href="${esc(mon.statusPageLink)}" target="_blank" style="color:inherit;display:flex;align-items:center;gap:8px">${icon} <span>${esc(mon.name)}</span></a>`
