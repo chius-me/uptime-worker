@@ -8,7 +8,7 @@ Make the current state of every monitored service immediately visible by showing
 
 - Keep the existing status model unchanged: operational, unavailable, and no data.
 - Render the icon in the existing service-name row, before the name and optional external link.
-- Do not add status text badges, error-reason copy, tooltips, or monitoring API fields.
+- Do not add status text badges, error-reason copy, status-icon tooltips, or monitoring API fields; retain the existing service-description tooltip.
 
 ## Visual behavior
 

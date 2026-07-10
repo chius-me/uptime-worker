@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Preserve the Worker API and monitor state model.
-- Render only a preceding icon: no text badge, error details, or tooltip.
+- Render only a preceding icon: no text badge, error details, or status-icon tooltip; retain the existing service-description tooltip.
 - Use `--green`, `--red`, and `--gray` for the up, down, and no-data states.
 
 ---
