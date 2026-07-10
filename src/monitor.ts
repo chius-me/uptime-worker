@@ -2,6 +2,27 @@ import { Env } from './index'
 import { MonitorTarget } from '../types/config'
 import { withTimeout, fetchTimeout } from './util'
 
+interface GlobalPingMeasurementResponse {
+  id: string
+  error?: { message: string }
+}
+
+interface GlobalPingResult {
+  status: string
+  results: Array<{
+    probe: { country: string; city: string }
+    result: {
+      status: string
+      stats?: { avg: number }
+      timings?: { total: number }
+      statusCode?: number
+      rawBody?: string
+      rawOutput?: string
+      tls?: { authorized: boolean; error?: string }
+    }
+  }>
+}
+
 function isIpAddress(hostname: string): boolean {
   // `URL.hostname` strips brackets for IPv6, so a `:` reliably indicates an IPv6 literal here.
   if (hostname.includes(':')) return true
@@ -159,10 +180,10 @@ export async function getStatusWithGlobalPing(
       },
       body: JSON.stringify(globalPingRequest),
     })
-    const measurementResponse = (await measurement.json()) as any
+    const measurementResponse = (await measurement.json()) as GlobalPingMeasurementResponse
 
     if (measurement.status !== 202) {
-      throw measurementResponse.error.message
+      throw measurementResponse.error?.message ?? 'Unknown GlobalPing API error'
     }
 
     const measurementId = measurementResponse.id
@@ -173,7 +194,7 @@ export async function getStatusWithGlobalPing(
     )
 
     const pollStart = Date.now()
-    let measurementResult: any
+    let measurementResult: GlobalPingResult
     while (true) {
       if (Date.now() - pollStart > (monitor.timeout ?? 10000) + 2000) {
         // 2s extra buffer
@@ -182,7 +203,7 @@ export async function getStatusWithGlobalPing(
 
       measurementResult = (await (
         await fetchTimeout(`https://api.globalping.io/v1/measurements/${measurementId}`, 5000)
-      ).json()) as any
+      ).json()) as GlobalPingResult
       if (measurementResult.status !== 'in-progress') {
         break
       }
@@ -213,7 +234,7 @@ export async function getStatusWithGlobalPing(
     const city = measurementResult.results[0].probe.city
 
     if (monitor.method === 'TCP_PING') {
-      const time = Math.round(measurementResult.results[0].result.stats.avg)
+      const time = Math.round(measurementResult.results[0].result.stats!.avg)
       return {
         location: country + '/' + city,
         status: {
@@ -223,23 +244,23 @@ export async function getStatusWithGlobalPing(
         },
       }
     } else {
-      const time = measurementResult.results[0].result.timings.total
-      const code = measurementResult.results[0].result.statusCode
-      const body = measurementResult.results[0].result.rawBody
+      const time = measurementResult.results[0].result.timings!.total
+      const code = measurementResult.results[0].result.statusCode!
+      const body = measurementResult.results[0].result.rawBody ?? ''
 
-      let err = await httpResponseBasicCheck(monitor, code, () => body)
+      let err = await httpResponseBasicCheck(monitor, code, async () => body)
       if (err !== null) {
         console.log(`${monitor.name} didn't pass response check: ${err}`)
       }
 
       if (
         monitor.target.toLowerCase().startsWith('https') &&
-        !measurementResult.results[0].result.tls.authorized
+        !measurementResult.results[0].result.tls?.authorized
       ) {
         console.log(
-          `${monitor.name} TLS certificate not trusted: ${measurementResult.results[0].result.tls.error}`
+          `${monitor.name} TLS certificate not trusted: ${measurementResult.results[0].result.tls?.error}`
         )
-        err = 'TLS certificate not trusted: ' + measurementResult.results[0].result.tls.error
+        err = 'TLS certificate not trusted: ' + (measurementResult.results[0].result.tls?.error ?? 'unknown')
       }
 
       return {

@@ -180,6 +180,9 @@ export class CompactedMonitorStateWrapper {
   latencyLen(monitorId: string): number {
     const latencies = this.data.latency[monitorId]
     if (!latencies) return 0
+    if (latencies.ping.length / 4 !== latencies.time.length / 8) {
+      console.warn(`Inconsistent latency data lengths for monitor ${monitorId}: ping=${latencies.ping.length / 4}, time=${latencies.time.length / 8}`)
+    }
     return latencies.ping.length / 4 // Uint16Array, 4 characters per entry in hex
   }
 
@@ -213,6 +216,9 @@ export class CompactedMonitorStateWrapper {
 
   getFirstLatency(monitorId: string): LatencyRecord {
     let latencies = this.data.latency[monitorId]
+    if (!latencies || latencies.time === '') {
+      return { time: 0, ping: 0, loc: '' }
+    }
 
     return {
       // @ts-expect-error
@@ -225,6 +231,9 @@ export class CompactedMonitorStateWrapper {
 
   getLastLatency(monitorId: string): LatencyRecord {
     let latencies = this.data.latency[monitorId]
+    if (!latencies || latencies.time === '') {
+      return { time: 0, ping: 0, loc: '' }
+    }
 
     return {
       // @ts-expect-error

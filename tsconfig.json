@@ -10,5 +10,5 @@
     "isolatedModules": true,
     "types": ["@cloudflare/workers-types"]
   },
-  "include": ["src/**/*.ts", "types/**/*.ts"]
+  "include": ["src/**/*.ts", "types/**/*.ts", "uptime.config*.ts"]
 }

@@ -32,7 +32,7 @@ function withTimeout<T>(millis: number, promise: Promise<T>): Promise<T> {
 }
 
 function formatStatusChangeNotification(
-  monitor: any,
+  monitor: MonitorTarget,
   isUp: boolean,
   timeIncidentStart: number,
   timeNow: number,
@@ -65,13 +65,13 @@ function formatStatusChangeNotification(
   }
 }
 
-function templateWebhookPlayload(payload: any, message: string) {
+function templateWebhookPayload(payload: Record<string, unknown>, message: string) {
   for (const key in payload) {
     if (Object.prototype.hasOwnProperty.call(payload, key)) {
       if (payload[key] === '$MSG') {
         payload[key] = message
       } else if (typeof payload[key] === 'object' && payload[key] !== null) {
-        templateWebhookPlayload(payload[key], message)
+        templateWebhookPayload(payload[key] as Record<string, unknown>, message)
       }
     }
   }
@@ -89,11 +89,7 @@ async function webhookNotify(env: Env, webhook: WebhookConfig, message: string) 
     'Sending webhook notification: ' + JSON.stringify(message) + ' to webhook ' + webhook.url
   )
   try {
-    let url = webhook.url
-    // Replace ENV variables in URL (e.g., telegram bot token)
-    if (url.includes('<TG_BOT_TOKEN>') && env.TG_BOT_TOKEN) {
-      url = url.replace('<TG_BOT_TOKEN>', env.TG_BOT_TOKEN)
-    }
+    let url = resolveEnvVars(webhook.url, env)
 
     let method = webhook.method
     let headers = new Headers(webhook.headers as any)
@@ -102,11 +98,13 @@ async function webhookNotify(env: Env, webhook: WebhookConfig, message: string) 
     )
 
     // Replace ENV variables in Payload (e.g., chat id)
-    if (payloadTemplated.chat_id === '<TG_CHAT_ID>' && env.TG_CHAT_ID) {
-      payloadTemplated.chat_id = env.TG_CHAT_ID
+    for (const key of Object.keys(payloadTemplated)) {
+      if (typeof payloadTemplated[key] === 'string') {
+        payloadTemplated[key] = resolveEnvVars(payloadTemplated[key] as string, env)
+      }
     }
 
-    templateWebhookPlayload(payloadTemplated, message)
+    templateWebhookPayload(payloadTemplated as unknown as Record<string, unknown>, message)
     let body = undefined
 
     switch (webhook.payloadType) {
@@ -201,6 +199,12 @@ const formatAndNotify = async (
   }
 }
 
+function resolveEnvVars(template: string, env: Record<string, any>): string {
+  return template.replace(/<([A-Z0-9_]+)>/g, (_match, key) => {
+    return env[key] != null ? String(env[key]) : _match
+  })
+}
+
 export {
   getWorkerLocation,
   fetchTimeout,
@@ -208,4 +212,5 @@ export {
   webhookNotify,
   formatStatusChangeNotification,
   formatAndNotify,
+  resolveEnvVars,
 }

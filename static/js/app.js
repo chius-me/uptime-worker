@@ -2,6 +2,7 @@
 // Pure Vanilla JS. No frameworks, no build step.
 
 let apiData = null   // from /api/data
+let lastRenderedAt = 0  // track last rendered updatedAt to skip unnecessary re-renders
 
 // ── SVG Icons ────────────────────────────────────
 const ICONS = {
@@ -43,9 +44,12 @@ async function fetchStatus() {
 
 function esc(str) {
   if (!str) return ''
-  const d = document.createElement('div')
-  d.textContent = str
-  return d.innerHTML
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
 }
 
 function getCssVar(name) {
@@ -83,6 +87,8 @@ async function render() {
   } else {
     renderStatusPage(main)
   }
+
+  lastRenderedAt = apiData.updatedAt
 }
 
 // ── Status Page ──────────────────────────────────
@@ -312,7 +318,8 @@ function drawChart(monId, state) {
   const plotW = w - pad.left - pad.right
   const plotH = h - pad.top - pad.bottom
 
-  const isDark = getCssVar('--text').trim() === '#c1c2c5'
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
+    (document.documentElement.getAttribute('data-theme') === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
   const lineColor = isDark ? '#70778c' : '#112'
   const gridColor = isDark ? '#373a40' : '#e9ecef'
   const textColor = isDark ? '#70778c' : '#868e96'
@@ -384,11 +391,11 @@ function renderIncidents(container) {
     container.innerHTML = `<div class="empty-state">${esc(msg)}</div>`
     return
   }
-  // Simple list for now
-  container.innerHTML = `<div class="empty-state">${I18N.t('Incidents history')}</div>`
+  let html = `<div class="empty-state">${I18N.t('Incidents history')}</div>`
   m.forEach(maintenance => {
-    container.innerHTML += renderMaintenance(maintenance, false, apiData.config)
+    html += renderMaintenance(maintenance, false, apiData.config)
   })
+  container.innerHTML = html
 }
 
 // ── Expose for inline event handlers ─────────────
@@ -410,9 +417,20 @@ function startAutoRefresh() {
   refreshTimer = setInterval(async () => {
     if (document.hidden) return
     await fetchStatus()
-    render()
+    if (apiData && apiData.updatedAt !== lastRenderedAt) {
+      render()
+    }
   }, 60000)
 }
+
+// ── Resize ────────────────────────────────────────
+let resizeTimer = null
+window.addEventListener('resize', () => {
+  if (resizeTimer) clearTimeout(resizeTimer)
+  resizeTimer = setTimeout(() => {
+    if (apiData) render()
+  }, 250)
+})
 
 // ── Theme ────────────────────────────────────────
 (function initTheme() {
@@ -423,8 +441,14 @@ function startAutoRefresh() {
 // ── Boot ─────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   await I18N.init()
+  const main = document.getElementById('main-content')
+  main.innerHTML = '<div class="empty-state"><div class="loading-spinner"></div></div>'
   window.addEventListener('hashchange', () => { if (apiData) render() })
-  await fetchStatus()
-  if (apiData) render()
+  const ok = await fetchStatus()
+  if (ok && apiData) {
+    render()
+  } else {
+    main.innerHTML = `<div class="empty-state">${esc(I18N.t('No data available'))}</div>`
+  }
   startAutoRefresh()
 })

@@ -1,8 +1,8 @@
 import { DurableObject } from 'cloudflare:workers'
 import { MonitorTarget } from '../types/config'
-import { workerConfig } from '../uptime.config'
+import { workerConfig, maintenances, pageConfig } from '../uptime.config'
 import { doMonitor, getStatus } from './monitor'
-import { formatAndNotify, getWorkerLocation } from './util'
+import { formatAndNotify, getWorkerLocation, resolveEnvVars } from './util'
 import { CompactedMonitorStateWrapper, getFromStore, setToStore } from './store'
 import pLimit from 'p-limit'
 
@@ -34,7 +34,7 @@ export default {
 
     // API 路由
     if (url.pathname === '/api/data') {
-      return handleDataAPI(env)
+      return handleDataAPI(env, ctx)
     }
     if (url.pathname === '/api/badge') {
       return handleBadgeAPI(request, env)
@@ -47,10 +47,15 @@ export default {
       const expected = 'Basic ' + btoa(passwordProtection)
       let authenticated = false
       if (authHeader && authHeader.length === expected.length) {
-        authenticated = true
-        for (let i = 0; i < authHeader.length; i++) {
-          if (authHeader[i] !== expected[i]) authenticated = false
+        const encoder = new TextEncoder()
+        const a = encoder.encode(authHeader)
+        const b = encoder.encode(expected)
+        // Constant-time comparison using XOR
+        let diff = 0
+        for (let i = 0; i < a.length; i++) {
+          diff |= a[i] ^ b[i]
         }
+        authenticated = diff === 0
       }
       if (!authenticated) {
         return new Response(
@@ -89,17 +94,9 @@ export default {
     let checkQueue: Promise<CheckResult>[] = []
     let checkResult: Record<string, CheckResult> = {};
     const limit = pLimit(5);
-    for (let monitor of workerConfig.monitors) {
-      // Inject env variables into monitor target
-      if (monitor.target.includes('<VPS1_IP>') && env.VPS1_IP) {
-        monitor = { ...monitor, target: monitor.target.replace('<VPS1_IP>', env.VPS1_IP) }
-      }
-      if (monitor.target.includes('<VPS1_PORT>') && env.VPS1_PORT) {
-        monitor = { ...monitor, target: monitor.target.replace('<VPS1_PORT>', env.VPS1_PORT) }
-      } else if (monitor.target.includes('<VPS1_PORT>')) {
-        monitor = { ...monitor, target: monitor.target.replace('<VPS1_PORT>', '22') } // default to 22
-      }
-
+    const envWithDefaults = { ...env, VPS1_PORT: env.VPS1_PORT || '22' } as Env
+    for (const rawMonitor of workerConfig.monitors) {
+      const monitor = { ...rawMonitor, target: resolveEnvVars(rawMonitor.target, envWithDefaults) }
       checkQueue.push(limit(() => doMonitor(monitor, workerLocation, env)))
     }
     for (const result of await Promise.all(checkQueue)) {
@@ -108,6 +105,7 @@ export default {
 
     // Update each monitor's state based on check results
     for (const monitor of workerConfig.monitors) {
+      try {
       console.log(`Processing monitor result: ${monitor.name} (${monitor.id})`)
 
       let monitorStatusChanged = false
@@ -299,6 +297,10 @@ export default {
       }
 
       statusChanged ||= monitorStatusChanged
+      } catch (e) {
+        console.error(`Error processing monitor ${monitor.id}:`, e)
+        continue
+      }
     }
 
     console.log(
@@ -355,8 +357,13 @@ const jsonHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type',
 }
 
-async function handleDataAPI(env: Env): Promise<Response> {
-  const { maintenances, pageConfig, workerConfig } = await import('../uptime.config')
+async function handleDataAPI(env: Env, ctx: ExecutionContext): Promise<Response> {
+  const cache = caches.default
+  const cacheKey = new Request('https://uptime-worker-internal/api/data', { method: 'GET' })
+
+  const cached = await cache.match(cacheKey)
+  if (cached) return cached
+
   const compactedState = new CompactedMonitorStateWrapper(
     await getFromStore(env, 'state')
   )
@@ -372,7 +379,7 @@ async function handleDataAPI(env: Env): Promise<Response> {
   const fullState = compactedState.uncompact()
 
   // Build summary monitors for quick access
-  let monitors: any = {}
+  let monitors: Record<string, { up: boolean; latency: number; location: string; message: string }> = {}
   for (let monitor of workerConfig.monitors) {
     const lastIncident = compactedState.getIncident(
       monitor.id,
@@ -397,7 +404,7 @@ async function handleDataAPI(env: Env): Promise<Response> {
     hideLatencyChart: m.hideLatencyChart,
   }))
 
-  return new Response(
+  const response = new Response(
     JSON.stringify({
       up: compactedState.data.overallUp,
       down: compactedState.data.overallDown,
@@ -420,8 +427,11 @@ async function handleDataAPI(env: Env): Promise<Response> {
         latency: fullState.latency,
       },
     }),
-    { headers: jsonHeaders }
+    { headers: { ...jsonHeaders, 'Cache-Control': `s-maxage=${(workerConfig.kvWriteCooldownMinutes ?? 3) * 60}` } }
   )
+
+  ctx.waitUntil(cache.put(cacheKey, response.clone()))
+  return response
 }
 
 type BadgePayload = {

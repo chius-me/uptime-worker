@@ -38,7 +38,13 @@ const I18N = {
 
   // Translate: t('key') or t('key', { var: 'value' })
   t(key, vars) {
-    let s = this.strings[key] || key
+    let lookupKey = key
+    // Basic plural support: if vars.count > 1, try key_plural first
+    if (vars && typeof vars.count === 'number' && vars.count !== 1) {
+      const pluralKey = key + '_plural'
+      if (this.strings[pluralKey]) lookupKey = pluralKey
+    }
+    let s = this.strings[lookupKey] || this.strings[key] || key
     if (vars) {
       for (const [k, v] of Object.entries(vars)) {
         s = s.replace(new RegExp(`\\{\\{${k}\\}\\}`, 'g'), String(v))

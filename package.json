@@ -2,6 +2,9 @@
   "name": "uptime-worker",
   "version": "0.1.0",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "description": "Serverless uptime monitoring & status page — pure Cloudflare Workers, zero Pages",
   "scripts": {
     "dev": "wrangler dev --test-scheduled --persist-to ./.wrangler/state",
