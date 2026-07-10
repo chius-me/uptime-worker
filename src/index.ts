@@ -4,6 +4,7 @@ import { workerConfig, maintenances, pageConfig } from '../uptime.config'
 import { doMonitor, getStatus } from './monitor'
 import { formatAndNotify, getWorkerLocation, resolveEnvVars } from './util'
 import { CompactedMonitorStateWrapper, getFromStore, setToStore } from './store'
+import { isBasicAuthValid } from './auth'
 import pLimit from 'p-limit'
 
 export interface Env {
@@ -34,37 +35,18 @@ export default {
       })
     }
 
-    // API 路由
+    if (!isBasicAuthValid(request.headers.get('Authorization'), workerConfig.passwordProtection)) {
+      return new Response(JSON.stringify({ code: 401, message: 'Not authenticated' }), {
+        status: 401,
+        headers: { 'WWW-Authenticate': 'Basic', 'Content-Type': 'application/json' },
+      })
+    }
+
     if (url.pathname === '/api/data') {
       return handleDataAPI(env, ctx)
     }
     if (url.pathname === '/api/badge') {
       return handleBadgeAPI(request, env)
-    }
-
-    // Basic Auth 保护（可选）：从配置读密码
-    const passwordProtection = workerConfig.passwordProtection
-    if (passwordProtection) {
-      const authHeader = request.headers.get('Authorization')
-      const expected = 'Basic ' + btoa(passwordProtection)
-      let authenticated = false
-      if (authHeader && authHeader.length === expected.length) {
-        const encoder = new TextEncoder()
-        const a = encoder.encode(authHeader)
-        const b = encoder.encode(expected)
-        // Constant-time comparison using XOR
-        let diff = 0
-        for (let i = 0; i < a.length; i++) {
-          diff |= a[i] ^ b[i]
-        }
-        authenticated = diff === 0
-      }
-      if (!authenticated) {
-        return new Response(
-          JSON.stringify({ code: 401, message: 'Not authenticated' }),
-          { status: 401, headers: { 'WWW-Authenticate': 'Basic', 'Content-Type': 'application/json' } }
-        )
-      }
     }
 
     // 非 API 路径 → Workers Static Assets（SPA）

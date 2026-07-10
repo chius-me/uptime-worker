@@ -20,6 +20,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Run tests and type checks
+        run: npm test && npx tsc --noEmit
+
       - name: Initialize D1 (idempotent)
         run: npx wrangler d1 execute uptime_worker_d1 --file=./deploy/init.sql --remote
         env:
