@@ -10,6 +10,7 @@
   "Hide": "[隱藏]",
   "Show": "[顯示]",
   "Operational": "運行中",
+  "Down": "離線",
   "No data available": "沒有資料，請確保已部署最新設定的 Worker 並檢查 Worker 狀態！",
   "Overall": "總運行率：{{percent}}%",
   "No Data": "沒有資料",

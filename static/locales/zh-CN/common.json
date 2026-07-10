@@ -10,6 +10,7 @@
   "Hide": "[隐藏]",
   "Show": "[显示]",
   "Operational": "在线",
+  "Down": "离线",
   "No data available": "暂无数据，请确保您已使用最新配置部署了 Worker 并检查 Worker 状态！",
   "Overall": "总可用率: {{percent}}%",
   "No Data": "暂无数据",

@@ -10,6 +10,7 @@
   "Hide": "[Hide]",
   "Show": "[Show]",
   "Operational": "Operational",
+  "Down": "Down",
   "No data available": "No data available, please make sure you have deployed your workers with latest config and check your worker status!",
   "Overall": "Overall: {{percent}}%",
   "No Data": "No Data",

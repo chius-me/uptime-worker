@@ -202,6 +202,10 @@ function renderMonitor(mon, monData, state) {
     ? `<span style="color:var(--green)">${ICONS.check}</span>`
     : `<span style="color:var(--red)">${ICONS.alert}</span>`
 
+  const statusBadge = isUp
+    ? `<span class="status-badge status-badge-up">${I18N.t('Operational')}</span>`
+    : `<span class="status-badge status-badge-down">${I18N.t('Down')}</span>`
+
   const nameHtml = mon.statusPageLink
     ? `<a href="${esc(mon.statusPageLink)}" target="_blank" style="color:inherit;display:flex;align-items:center;gap:8px">${icon} <span>${esc(mon.name)}</span></a>`
     : `<span style="display:flex;align-items:center;gap:8px">${icon} <span>${esc(mon.name)}</span></span>`
@@ -209,7 +213,10 @@ function renderMonitor(mon, monData, state) {
   return `
     <div class="monitor-header">
       <div class="monitor-name" title="${esc(mon.tooltip || '')}">${nameHtml}</div>
-      <div class="monitor-uptime" id="uptime-${mon.id}"></div>
+      <div style="display:flex;align-items:center;gap:12px">
+        ${statusBadge}
+        <div class="monitor-uptime" id="uptime-${mon.id}"></div>
+      </div>
     </div>
     <div class="uptime-bars" id="bars-${mon.id}"></div>
     ${mon.hideLatencyChart ? '' : `

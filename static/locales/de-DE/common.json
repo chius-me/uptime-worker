@@ -10,6 +10,7 @@
   "Hide": "[verstecken]",
   "Show": "[zeigen]",
   "Operational": "Funktionsfähig",
+  "Down": "Ausgefallen",
   "No data available": "Keine Daten verfügbar, stelle sicher dass der Worker mit der letzten Config-Version deployed wurde und prüfe den Worker-Status!",
   "Overall": "Gesamt: {{percent}}%",
   "No Data": "Keine Daten",

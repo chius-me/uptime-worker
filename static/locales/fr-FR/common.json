@@ -10,6 +10,7 @@
   "Hide": "[Masquer]",
   "Show": "[Afficher]",
   "Operational": "Opérationnel",
+  "Down": "Hors ligne",
   "No data available": "Aucune donnée disponible. Veuillez vous assurer d'avoir déployé vos workers avec la dernière configuration et vérifiez leur statut !",
   "Overall": "Moyenne : {{percent}}%",
   "No Data": "Aucune donnée",
