@@ -32,11 +32,9 @@ const workerConfig: WorkerConfig = {
     {
       id: 'homelab',
       name: 'HomeLab',
-      method: 'GET',
-      target: 'https://social.chius.cc',
-      tooltip: 'GoToSocial and more HomeLab services',
-      statusPageLink: 'https://social.chius.cc',
-      expectedCodes: [200],
+      method: 'TCP_PING',
+      target: 'lan.chius.cc:443',
+      tooltip: 'HomeLab IPv6 connectivity',
       timeout: 10000,
     },
     {
