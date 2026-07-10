@@ -98,18 +98,15 @@ a:hover {
 
 /* ── Header / Nav ──────────────────────────────── */
 #header {
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-card);
-  backdrop-filter: var(--backdrop);
-  -webkit-backdrop-filter: var(--backdrop);
+  background: var(--bg);
   position: sticky;
   top: 0;
   z-index: 100;
-  transition: background 0.25s, border-color 0.25s;
+  transition: background 0.25s;
 }
 
 .nav-bar {
-  max-width: 880px;
+  max-width: 1048px;
   margin: 0 auto;
   padding: 14px 20px;
   display: flex;
@@ -204,7 +201,7 @@ html[data-theme="dark"] .theme-toggle-btn .moon-icon { display: none; }
 
 /* ── Main Content ──────────────────────────────── */
 #main-content {
-  max-width: 880px;
+  max-width: 1048px;
   margin: 0 auto;
   padding: 32px 20px;
   animation: fadeIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);

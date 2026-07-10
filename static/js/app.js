@@ -120,16 +120,7 @@ function renderStatusPage(container) {
   const nowSec = Math.round(now / 1000)
   const secondsAgo = updatedAt ? nowSec - updatedAt : 0
 
-  let html = `
-    <div class="overall-status ${statusClass}">
-      <div class="overall-icon">${iconHtml}</div>
-      <div class="status-title">${esc(statusText)}</div>
-      <div class="status-subtitle">${I18N.t('Last updated on', {
-        date: new Date(updatedAt * 1000).toLocaleString(),
-        seconds: secondsAgo
-      })}</div>
-    </div>
-  `
+  let html = ''
 
   // Active maintenances
   const nowDate = new Date()
@@ -331,8 +322,9 @@ function drawChart(monId, state, hoverPoint = null) {
     (document.documentElement.getAttribute('data-theme') === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
   const gridColor = isDark ? 'rgba(30, 41, 59, 0.6)' : '#e2e8f0'
   const textColor = isDark ? '#64748b' : '#94a3b8'
-  const accentColor = isDark ? '#60a5fa' : '#2563eb'
-  const fillGradientStart = isDark ? 'rgba(96, 165, 250, 0.15)' : 'rgba(37, 99, 235, 0.08)'
+  // Pale, low-saturation color for chart
+  const accentColor = isDark ? '#64748b' : '#cbd5e1'
+  const fillGradientStart = isDark ? 'rgba(100, 116, 139, 0.15)' : 'rgba(203, 213, 225, 0.25)'
 
   // Data range
   const points = latencies.map(l => ({ x: l.time * 1000, y: l.ping }))
@@ -424,7 +416,7 @@ function drawChart(monId, state, hoverPoint = null) {
     // Glowing outer circle
     ctx.beginPath()
     ctx.arc(hx, hy, 5.5, 0, 2 * Math.PI)
-    ctx.fillStyle = isDark ? 'rgba(96, 165, 250, 0.3)' : 'rgba(37, 99, 235, 0.25)'
+    ctx.fillStyle = isDark ? 'rgba(100, 116, 139, 0.3)' : 'rgba(203, 213, 225, 0.4)'
     ctx.fill()
 
     // Solid inner dot
