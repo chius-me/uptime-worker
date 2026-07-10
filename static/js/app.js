@@ -6,19 +6,19 @@ let lastRenderedAt = 0  // track last rendered updatedAt to skip unnecessary re-
 
 // ── SVG Icons ────────────────────────────────────
 const ICONS = {
-  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
-  alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
-  triangle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
+  alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
+  triangle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
 }
 
 // ── Color ────────────────────────────────────────
 function barColor(percent) {
   const p = Number(percent)
-  if (p >= 99.9) return '#3bd671'
-  if (p >= 99)   return '#9deab8'
-  if (p >= 95)   return '#f29030'
-  if (isNaN(p))  return '#adb5bd'
-  return '#df484a'
+  if (p >= 99.9) return 'var(--green)'
+  if (p >= 99)   return 'rgba(16, 185, 129, 0.6)'
+  if (p >= 95)   return 'var(--orange)'
+  if (isNaN(p))  return 'var(--gray)'
+  return 'var(--red)'
 }
 
 function hexToRgb(hex) {
@@ -96,21 +96,24 @@ function renderStatusPage(container) {
   const { up, down, updatedAt, monitors, maintenances, state, monitorsConfig, config } = apiData
 
   const total = up + down
-  let statusText, statusColor = '#059669', iconHtml = ICONS.check
+  let statusText, iconHtml = ICONS.check
+  let statusClass = 'status-ok'
+
   if (total === 0) {
     statusText = I18N.t('No data yet')
-    statusColor = '#adb5bd'
     iconHtml = ICONS.alert
+    statusClass = 'status-warn'
   } else if (up === 0) {
     statusText = I18N.t('All systems not operational')
-    statusColor = '#df484a'
     iconHtml = ICONS.alert
+    statusClass = 'status-error'
   } else if (down === 0) {
     statusText = I18N.t('All systems operational')
+    statusClass = 'status-ok'
   } else {
     statusText = I18N.t('Some systems not operational', { down, total })
-    statusColor = '#f29030'
     iconHtml = ICONS.alert
+    statusClass = 'status-warn'
   }
 
   const now = Date.now()
@@ -118,9 +121,9 @@ function renderStatusPage(container) {
   const secondsAgo = updatedAt ? nowSec - updatedAt : 0
 
   let html = `
-    <div class="overall-status">
-      <div class="overall-icon" style="color:${statusColor}">${iconHtml}</div>
-      <div class="status-title" style="color:${statusColor}">${esc(statusText)}</div>
+    <div class="overall-status ${statusClass}">
+      <div class="overall-icon">${iconHtml}</div>
+      <div class="status-title">${esc(statusText)}</div>
       <div class="status-subtitle">${I18N.t('Last updated on', {
         date: new Date(updatedAt * 1000).toLocaleString(),
         seconds: secondsAgo
@@ -153,11 +156,11 @@ function renderStatusPage(container) {
     Object.entries(group).forEach(([gName, ids]) => {
       const mons = monitorsConfig.filter(m => ids.includes(m.id))
       const downC = mons.filter(m => monitors[m.id] && !monitors[m.id].up).length
-      const gColor = downC === 0 ? '#059669' : downC === mons.length ? '#df484a' : '#f29030'
+      const gColor = downC === 0 ? 'var(--green)' : downC === mons.length ? 'var(--red)' : 'var(--orange)'
       html += `<details class="monitor-card" open>
         <summary style="cursor:pointer;font-weight:600;display:flex;justify-content:space-between;align-items:center;padding:4px 0">
           <span>${esc(gName)}</span>
-          <span style="color:${gColor}">${mons.length - downC}/${mons.length} ${I18N.t('Operational')}</span>
+          <span style="color:${gColor};font-family:var(--font-mono);font-size:0.875rem">${mons.length - downC}/${mons.length} ${I18N.t('Operational')}</span>
         </summary>`
       mons.forEach(m => { html += renderMonitor(m, monitors[m.id], state) })
       html += `</details>`
@@ -205,12 +208,12 @@ function renderMonitor(mon, monData, state) {
 
   const isUp = monData.up
   const icon = isUp
-    ? `<span style="color:#059669">${ICONS.check}</span>`
-    : `<span style="color:#df484a">${ICONS.alert}</span>`
+    ? `<span style="color:var(--green)">${ICONS.check}</span>`
+    : `<span style="color:var(--red)">${ICONS.alert}</span>`
 
   const nameHtml = mon.statusPageLink
-    ? `<a href="${esc(mon.statusPageLink)}" target="_blank" style="color:inherit;display:flex;align-items:center;gap:6px">${icon} ${esc(mon.name)}</a>`
-    : `<span style="display:flex;align-items:center;gap:6px">${icon} ${esc(mon.name)}</span>`
+    ? `<a href="${esc(mon.statusPageLink)}" target="_blank" style="color:inherit;display:flex;align-items:center;gap:8px">${icon} <span>${esc(mon.name)}</span></a>`
+    : `<span style="display:flex;align-items:center;gap:8px">${icon} <span>${esc(mon.name)}</span></span>`
 
   return `
     <div class="monitor-header">
@@ -218,7 +221,12 @@ function renderMonitor(mon, monData, state) {
       <div class="monitor-uptime" id="uptime-${mon.id}"></div>
     </div>
     <div class="uptime-bars" id="bars-${mon.id}"></div>
-    ${mon.hideLatencyChart ? '' : `<div class="chart-container" id="chart-wrap-${mon.id}"><canvas id="chart-${mon.id}"></canvas></div>`}
+    ${mon.hideLatencyChart ? '' : `
+      <div class="chart-container" id="chart-wrap-${mon.id}">
+        <canvas id="chart-${mon.id}"></canvas>
+        <div class="chart-tooltip" id="chart-tooltip-${mon.id}"></div>
+      </div>
+    `}
   `
 }
 
@@ -241,6 +249,7 @@ function drawBars(monId, state) {
   }
 
   const bars = []
+  container.innerHTML = '' // Clear existing
   for (let i = 89; i >= 0; i--) {
     const dayStart = todayStart - i * 86400
     const dayEnd = dayStart + 86400
@@ -282,8 +291,8 @@ function calcAndSetUptime(monId, state) {
   el.style.color = barColor(pct)
 }
 
-// ── Latency Chart (Canvas) ───────────────────────
-function drawChart(monId, state) {
+// ── Latency Chart (Canvas with Bezier curves & Mouseover Interactive Tooltips) ──
+function drawChart(monId, state, hoverPoint = null) {
   const canvas = document.getElementById(`chart-${monId}`)
   if (!canvas) return
   const latencies = state?.latency?.[monId]
@@ -295,8 +304,8 @@ function drawChart(monId, state) {
     canvas.style.width = (parent.clientWidth || 800) + 'px'
     canvas.style.height = '150px'
     ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1)
-    ctx.fillStyle = getCssVar('--text-muted') || '#909296'
-    ctx.font = '14px -apple-system, sans-serif'
+    ctx.fillStyle = getCssVar('--text-muted') || '#94a3b8'
+    ctx.font = '13px Geist, sans-serif'
     ctx.textAlign = 'center'
     ctx.fillText(I18N.t('No data available'), canvas.width / 2 / (window.devicePixelRatio || 1), 80)
     return
@@ -320,9 +329,10 @@ function drawChart(monId, state) {
 
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
     (document.documentElement.getAttribute('data-theme') === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
-  const lineColor = isDark ? '#70778c' : '#112'
-  const gridColor = isDark ? '#373a40' : '#e9ecef'
-  const textColor = isDark ? '#70778c' : '#868e96'
+  const gridColor = isDark ? 'rgba(30, 41, 59, 0.6)' : '#e2e8f0'
+  const textColor = isDark ? '#64748b' : '#94a3b8'
+  const accentColor = isDark ? '#60a5fa' : '#2563eb'
+  const fillGradientStart = isDark ? 'rgba(96, 165, 250, 0.15)' : 'rgba(37, 99, 235, 0.08)'
 
   // Data range
   const points = latencies.map(l => ({ x: l.time * 1000, y: l.ping }))
@@ -338,7 +348,7 @@ function drawChart(monId, state) {
   // Grid lines
   ctx.strokeStyle = gridColor
   ctx.lineWidth = 1
-  ctx.font = '11px -apple-system, sans-serif'
+  ctx.font = '10px Geist Mono, monospace'
   ctx.fillStyle = textColor
   ctx.textAlign = 'right'
 
@@ -350,40 +360,158 @@ function drawChart(monId, state) {
     ctx.moveTo(pad.left, yPos)
     ctx.lineTo(w - pad.right, yPos)
     ctx.stroke()
-    ctx.fillText(Math.round(yVal) + 'ms', pad.left - 6, yPos + 4)
+    ctx.fillText(Math.round(yVal) + 'ms', pad.left - 8, yPos + 3)
   }
 
-  // Line
+  // Draw smooth Bezier curve line
   if (points.length >= 2) {
     ctx.beginPath()
-    ctx.strokeStyle = isDark ? '#70778c' : '#909296'
+    ctx.moveTo(toX(points[0].x), toY(points[0].y))
+    for (let i = 0; i < points.length - 1; i++) {
+      const x0 = toX(points[i].x)
+      const y0 = toY(points[i].y)
+      const x1 = toX(points[i+1].x)
+      const y1 = toY(points[i+1].y)
+      ctx.bezierCurveTo(x0 + (x1 - x0) / 2, y0, x0 + (x1 - x0) / 2, y1, x1, y1)
+    }
+    ctx.strokeStyle = accentColor
     ctx.lineWidth = 2
     ctx.lineJoin = 'round'
-    ctx.moveTo(toX(points[0].x), toY(points[0].y))
-    for (let i = 1; i < points.length; i++) {
-      ctx.lineTo(toX(points[i].x), toY(points[i].y))
-    }
     ctx.stroke()
 
-    // Fill gradient under line
-    const gradient = ctx.createLinearGradient(0, pad.top, 0, pad.top + plotH)
-    gradient.addColorStop(0, isDark ? 'rgba(112,119,140,0.2)' : 'rgba(144,146,150,0.2)')
-    gradient.addColorStop(1, 'rgba(0,0,0,0.01)')
+    // Closed Area Gradient fill
+    ctx.beginPath()
+    ctx.moveTo(toX(points[0].x), toY(points[0].y))
+    for (let i = 0; i < points.length - 1; i++) {
+      const x0 = toX(points[i].x)
+      const y0 = toY(points[i].y)
+      const x1 = toX(points[i+1].x)
+      const y1 = toY(points[i+1].y)
+      ctx.bezierCurveTo(x0 + (x1 - x0) / 2, y0, x0 + (x1 - x0) / 2, y1, x1, y1)
+    }
     ctx.lineTo(toX(points[points.length - 1].x), pad.top + plotH)
     ctx.lineTo(toX(points[0].x), pad.top + plotH)
     ctx.closePath()
+
+    const gradient = ctx.createLinearGradient(0, pad.top, 0, pad.top + plotH)
+    gradient.addColorStop(0, fillGradientStart)
+    gradient.addColorStop(1, 'rgba(0, 0, 0, 0.01)')
     ctx.fillStyle = gradient
     ctx.fill()
   }
 
   // Title
-  ctx.fillStyle = textColor
-  ctx.font = '12px -apple-system, sans-serif'
+  ctx.fillStyle = isDark ? '#cbd5e1' : '#475569'
+  ctx.font = '600 11px Geist, sans-serif'
   ctx.textAlign = 'left'
   ctx.fillText(I18N.t('Response times'), pad.left, 14)
+
+  // Hover Overlay elements
+  if (hoverPoint) {
+    const hx = toX(hoverPoint.x)
+    const hy = toY(hoverPoint.y)
+
+    // Vertical dashed guideline
+    ctx.beginPath()
+    ctx.setLineDash([3, 3])
+    ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.25)' : 'rgba(15, 23, 42, 0.15)'
+    ctx.lineWidth = 1
+    ctx.moveTo(hx, pad.top)
+    ctx.lineTo(hx, pad.top + plotH)
+    ctx.stroke()
+    ctx.setLineDash([])
+
+    // Glowing outer circle
+    ctx.beginPath()
+    ctx.arc(hx, hy, 5.5, 0, 2 * Math.PI)
+    ctx.fillStyle = isDark ? 'rgba(96, 165, 250, 0.3)' : 'rgba(37, 99, 235, 0.25)'
+    ctx.fill()
+
+    // Solid inner dot
+    ctx.beginPath()
+    ctx.arc(hx, hy, 3.5, 0, 2 * Math.PI)
+    ctx.fillStyle = accentColor
+    ctx.strokeStyle = isDark ? '#090d16' : '#ffffff'
+    ctx.lineWidth = 1.5
+    ctx.fill()
+    ctx.stroke()
+  }
+
+  // Setup event listeners once
+  if (!canvas.dataset.listenerAttached) {
+    canvas.dataset.listenerAttached = 'true'
+
+    const handleMove = (e) => {
+      if (!apiData) return
+      const latencies = apiData.state?.latency?.[monId]
+      if (!latencies || latencies.length < 2) return
+
+      const rect = canvas.getBoundingClientRect()
+      const mouseX = e.clientX - rect.left
+
+      const pad = { top: 24, bottom: 20, left: 44, right: 16 }
+      const plotW = rect.width - pad.left - pad.right
+
+      const points = latencies.map(l => ({ x: l.time * 1000, y: l.ping }))
+      const xMin = points[0].x
+      const xMax = points[points.length - 1].x
+      const xRange = xMax - xMin || 1
+
+      function toX(x) { return pad.left + (x - xMin) / xRange * plotW }
+
+      // Find closest data point
+      let closest = points[0]
+      let minXDist = Math.abs(toX(closest.x) - mouseX)
+      for (let i = 1; i < points.length; i++) {
+        const xPos = toX(points[i].x)
+        const dist = Math.abs(xPos - mouseX)
+        if (dist < minXDist) {
+          closest = points[i]
+          minXDist = dist
+        }
+      }
+
+      // Redraw canvas with hover dot and dashed line
+      drawChart(monId, apiData.state, closest)
+
+      // Render and position floating HTML tooltip
+      const tooltip = document.getElementById(`chart-tooltip-${monId}`)
+      if (tooltip) {
+        const yMin = 0
+        const yMax = Math.max(...points.map(p => p.y)) * 1.15 || 100
+        const plotH = rect.height - pad.top - pad.bottom
+        function toY(y) { return pad.top + plotH - (y - yMin) / (yMax - yMin) * plotH }
+
+        const tx = toX(closest.x)
+        const ty = toY(closest.y)
+
+        tooltip.innerHTML = `
+          <div class="tooltip-time">${new Date(closest.x).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+          <div class="tooltip-value">${Math.round(closest.y)} ms</div>
+        `
+        tooltip.style.left = `${tx}px`
+        tooltip.style.top = `${ty - 40}px`
+        tooltip.style.opacity = '1'
+        tooltip.style.visibility = 'visible'
+      }
+    }
+
+    const handleLeave = () => {
+      if (!apiData) return
+      drawChart(monId, apiData.state, null)
+      const tooltip = document.getElementById(`chart-tooltip-${monId}`)
+      if (tooltip) {
+        tooltip.style.opacity = '0'
+        tooltip.style.visibility = 'hidden'
+      }
+    }
+
+    canvas.addEventListener('mousemove', handleMove)
+    canvas.addEventListener('mouseleave', handleLeave)
+  }
 }
 
-// ── Incidents Page ───────────────────────────────
+// ── Incidents Page ──────────────────────────────
 function renderIncidents(container) {
   const m = apiData?.maintenances || []
   if (m.length === 0) {
@@ -396,6 +524,30 @@ function renderIncidents(container) {
     html += renderMaintenance(maintenance, false, apiData.config)
   })
   container.innerHTML = html
+}
+
+// ── Theme Switcher Manual Toggle logic ───────────
+function setupThemeToggle() {
+  const btn = document.getElementById('theme-toggle')
+  if (!btn) return
+
+  btn.addEventListener('click', () => {
+    const current = document.documentElement.getAttribute('data-theme') || 'auto'
+    let next = 'light'
+
+    if (current === 'auto') {
+      const isSystemDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      next = isSystemDark ? 'light' : 'dark'
+    } else {
+      next = current === 'dark' ? 'light' : 'dark'
+    }
+
+    document.documentElement.setAttribute('data-theme', next)
+    localStorage.setItem('uptime-worker-theme', next)
+    
+    // Redraw charts to update grid/axis colors to match the theme immediately
+    if (apiData) render()
+  })
 }
 
 // ── Expose for inline event handlers ─────────────
@@ -441,6 +593,7 @@ window.addEventListener('resize', () => {
 // ── Boot ─────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', async () => {
   await I18N.init()
+  setupThemeToggle()
   const main = document.getElementById('main-content')
   main.innerHTML = '<div class="empty-state"><div class="loading-spinner"></div></div>'
   window.addEventListener('hashchange', () => { if (apiData) render() })
