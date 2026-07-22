@@ -88,3 +88,55 @@ Tests  10 passed (10)
 ## Concerns
 
 - The deployment release gate remains operational: rotate the Telegram Bot Token after deployment, and revoke the old token before subsequent phases if Cloudflare Logs retained prior leaked values.
+
+## Follow-up: safe monitor IDs before interpolation
+
+Review identified that monitor IDs are logged and were previously included in the generic recursive resolver. A placeholder in an ID could therefore be resolved to a secret before reaching structured logs.
+
+- Added raw pre-resolution monitor ID validation using the documented safe opaque pattern `^[A-Za-z0-9_-]{1,64}$`.
+- Placeholder IDs and unsafe IDs (slashes, whitespace, empty IDs, and IDs longer than 64 characters) now fail with `Invalid monitor id at monitors[index].id` before recursive resolution.
+- Kept duplicate-ID validation after resolution as required.
+
+### Follow-up RED
+
+Command:
+
+```sh
+npx vitest run tests/config.test.ts tests/logging.test.ts
+```
+
+Relevant output:
+
+```text
+Test Files  1 failed | 1 passed (2)
+Tests  5 failed | 6 passed (11)
+
+rejects placeholder monitor ids before their secret values can be resolved
+expected [Function] to throw an error
+
+rejects unsafe monitor id "api/service"
+rejects unsafe monitor id "api id"
+rejects unsafe monitor id ""
+rejects unsafe monitor id "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+```
+
+### Follow-up GREEN and typecheck
+
+Command:
+
+```sh
+npx vitest run tests/config.test.ts tests/logging.test.ts && npx tsc --noEmit
+```
+
+Output:
+
+```text
+Test Files  2 passed (2)
+Tests  11 passed (11)
+```
+
+`npx tsc --noEmit` completed successfully without output.
+
+### Recorded minor review note
+
+`webhookNotify` retains its unused `_env` parameter because the Task 1 brief explicitly requires the existing `webhookNotify(env, ...)` interface. It is intentionally deferred rather than changing that interface in this containment fix.

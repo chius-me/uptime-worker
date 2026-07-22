@@ -4,6 +4,8 @@ const PLACEHOLDER = /<([A-Z0-9_]+)>/g
 const MIN_TIMEOUT = 1
 const MAX_TIMEOUT = 30000
 const PROXY_PROTOCOLS = new Set(['http:', 'https:', 'worker:', 'globalping:'])
+// Monitor IDs are safe opaque log identifiers: 1–64 alphanumeric, underscore, or hyphen characters.
+const SAFE_MONITOR_ID = /^[A-Za-z0-9_-]{1,64}$/
 
 export function resolveConfigValue<T>(value: T, env: Record<string, unknown>, path = 'config'): T {
   if (typeof value === 'string') {
@@ -54,6 +56,12 @@ export function validateAndResolveConfig(
   config: WorkerConfig,
   env: Record<string, unknown>
 ): WorkerConfig {
+  config.monitors.forEach((monitor, index) => {
+    if (!SAFE_MONITOR_ID.test(monitor.id)) {
+      throw new Error(`Invalid monitor id at monitors[${index}].id`)
+    }
+  })
+
   const resolvedConfig = resolveConfigValue(config, env)
   const monitorIds = new Set<string>()
 

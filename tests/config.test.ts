@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { resolveConfigValue, validateAndResolveConfig } from '../src/config'
 
 describe('runtime configuration resolution', () => {
@@ -26,6 +26,27 @@ describe('runtime configuration resolution', () => {
     }
 
     expect(() => validateAndResolveConfig(config, {})).toThrow('Duplicate monitor id: duplicate')
+  })
+
+  it('rejects placeholder monitor ids before their secret values can be resolved', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const config = {
+      monitors: [{ id: '<API_TOKEN>', name: 'API', method: 'GET', target: 'https://api.example' }],
+    }
+
+    expect(() => validateAndResolveConfig(config, { API_TOKEN: 'secret_that_must_not_be_logged' })).toThrow(
+      'Invalid monitor id at monitors[0].id'
+    )
+    expect(logSpy).not.toHaveBeenCalled()
+    logSpy.mockRestore()
+  })
+
+  it.each(['api/service', 'api id', '', 'a'.repeat(65)])('rejects unsafe monitor id %j', (id) => {
+    const config = {
+      monitors: [{ id, name: 'API', method: 'GET', target: 'https://api.example' }],
+    }
+
+    expect(() => validateAndResolveConfig(config, {})).toThrow('Invalid monitor id at monitors[0].id')
   })
 
   it('rejects monitor and webhook timeouts outside 1 through 30000ms', () => {
