@@ -105,3 +105,32 @@ git diff --check
 - Confirmed custom-proxy redirects cannot be auto-followed and 3xx bodies are never parsed.
 - Confirmed the same classifier creates notification categories and reconstructs them from stored internal diagnostics.
 - Confirmed Task 5 schema and Task 6 scheduler/outbox behavior remain out of scope and unchanged.
+
+## Cancellation cleanup and classifier follow-up
+
+### RED evidence
+
+Command:
+
+```text
+npx vitest run tests/monitor.test.ts tests/proxy.test.ts tests/api.test.ts
+```
+
+Result: exit 1, 4 failed / 33 passed. A never-settling reader cancellation changed the bounded-content result into `Timeout`; a never-settling unlocked body cancellation prevented a completed HTTP probe from resolving; and `Connection: upstream timeout detail` was classified and proxy-validated as `Timeout` instead of `Connection failed`.
+
+### GREEN evidence
+
+```text
+npx vitest run tests/monitor.test.ts tests/proxy.test.ts tests/api.test.ts
+# Test Files 3 passed (3); Tests 37 passed (37); exit 0
+
+npx tsc --noEmit
+# exit 0, no diagnostics
+```
+
+### Follow-up changes and self-review
+
+- Reader and response-body cancellation is invoked inside guarded cleanup with rejection handlers attached, but its promise is never awaited. Reader-lock release is also best effort, so cleanup cannot replace the original probe result/error.
+- The scoped deadline helper aborts first, initiates body cancellation next, and clears its timer only after cleanup has been initiated.
+- Regression coverage uses both an oversized custom reader and an unlocked `ReadableStream` whose `cancel()` returns a never-settling promise; both probes settle without waiting for cancellation.
+- Canonical `Connection:` is checked before every legacy heuristic, so diagnostic detail containing `timeout` cannot change its public category. Strict proxy validation shares the same precedence.

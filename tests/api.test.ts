@@ -229,6 +229,7 @@ describe('public status API contracts', () => {
     expect(classifier).toBeTypeOf('function')
     expect(classifier!('deadline exceeded')).toBe('Connection failed')
     expect(classifier!('Timeout: deadline exceeded')).toBe('Timeout')
+    expect(classifier!('Connection: upstream timeout detail')).toBe('Connection failed')
   })
 
   it('reconstructs the same public categories from persisted canonical diagnostics', () => {

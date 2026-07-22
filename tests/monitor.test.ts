@@ -33,7 +33,7 @@ describe('bounded monitor probes', () => {
   })
 
   it('bounds HTTP keyword response reads and cancels the stream', async () => {
-    const cancel = vi.fn(async () => undefined)
+    const cancel = vi.fn(() => new Promise<never>(() => undefined))
     const reader = {
       read: vi
         .fn()
@@ -53,6 +53,25 @@ describe('bounded monitor probes', () => {
     })
 
     expect(result).toMatchObject({ up: false, publicMessage: 'Content check inconclusive' })
+    expect(cancel).toHaveBeenCalledOnce()
+  })
+
+  it('does not await a never-settling response cancellation', async () => {
+    vi.useFakeTimers()
+    const cancel = vi.fn(() => new Promise<never>(() => undefined))
+    const stream = new ReadableStream<Uint8Array>({ cancel })
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(stream, { status: 200 })))
+
+    const pending = getStatus({
+      id: 'http-cancel', name: 'HTTP cancel', method: 'GET', target: 'https://service.example',
+      timeout: 20,
+    })
+    const settled = vi.fn()
+    void pending.then(settled)
+    await vi.advanceTimersByTimeAsync(20)
+
+    expect(settled).toHaveBeenCalledOnce()
+    await expect(pending).resolves.toMatchObject({ up: true, publicMessage: 'OK' })
     expect(cancel).toHaveBeenCalledOnce()
   })
 

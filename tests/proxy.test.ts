@@ -89,6 +89,14 @@ describe('custom and Durable Object proxies', () => {
       location: 'SJC',
       status: { ping: 1, up: false, internalError: 'Timeout: deadline exceeded', publicMessage: 'Timeout' },
     }).status.publicMessage).toBe('Timeout')
+    expect(() => parseProxyResult({
+      location: 'SJC',
+      status: { ping: 1, up: false, internalError: 'Connection: upstream timeout detail', publicMessage: 'Timeout' },
+    })).toThrow()
+    expect(parseProxyResult({
+      location: 'SJC',
+      status: { ping: 1, up: false, internalError: 'Connection: upstream timeout detail', publicMessage: 'Connection failed' },
+    }).status.publicMessage).toBe('Connection failed')
   })
 
   it('does not follow a redirect away from an allowlisted custom proxy', async () => {

@@ -52,7 +52,11 @@ export async function readTextLimited(
   let text = ''
   let completed = false
   const cancelOnAbort = () => {
-    void reader.cancel(signal?.reason).catch(() => undefined)
+    try {
+      void reader.cancel(signal?.reason).catch(() => undefined)
+    } catch {
+      // Cancellation must not replace the probe result.
+    }
   }
   if (signal?.aborted) cancelOnAbort()
   else signal?.addEventListener('abort', cancelOnAbort, { once: true })
@@ -73,8 +77,18 @@ export async function readTextLimited(
     }
   } finally {
     signal?.removeEventListener('abort', cancelOnAbort)
-    if (!completed) await reader.cancel().catch(() => undefined)
-    reader.releaseLock()
+    if (!completed) {
+      try {
+        void reader.cancel().catch(() => undefined)
+      } catch {
+        // Cancellation must not replace the body result or error.
+      }
+    }
+    try {
+      reader.releaseLock()
+    } catch {
+      // Releasing a reader is best-effort cleanup.
+    }
   }
 }
 
@@ -113,10 +127,14 @@ export async function fetchAndConsumeWithTimeout<T>(
       throw error
     }
   } finally {
-    clearTimeout(timer!)
     parentSignal?.removeEventListener('abort', abortFromParent)
     if (!controller.signal.aborted) controller.abort()
-    await Promise.resolve(response?.body?.cancel()).catch(() => undefined)
+    try {
+      void response?.body?.cancel().catch(() => undefined)
+    } catch {
+      // Cancellation must not replace the fetch result or error.
+    }
+    clearTimeout(timer!)
   }
 }
 
@@ -188,6 +206,7 @@ export function publicMessageForInternalError(internalError: string): PublicMess
   if (internalError.startsWith('TLS validation:')) return 'TLS validation failed'
   if (internalError.startsWith('Content check inconclusive:')) return 'Content check inconclusive'
   if (internalError.startsWith('Content check:')) return 'Content check failed'
+  if (internalError.startsWith('Connection:')) return 'Connection failed'
   if (/timeout|abort/i.test(internalError)) return 'Timeout'
   if (/status|expected code/i.test(internalError)) return 'Unexpected status code'
   if (/tls|certificate/i.test(internalError)) return 'TLS validation failed'
