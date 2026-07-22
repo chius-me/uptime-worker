@@ -14,7 +14,7 @@ import { publicMessageForInternalError } from './probe'
 export async function getFromStore(env: Env, key: string): Promise<string | null> {
   const stmt = env.UPTIME_WORKER_D1.prepare('SELECT value FROM uptimeflare WHERE key = ?')
   const result = await stmt.bind(key).first<{ value: string }>()
-  return result?.value || null
+  return result?.value ?? null
 }
 
 export async function setToStore(env: Env, key: string, value: string): Promise<void> {
@@ -389,7 +389,7 @@ export class CompactedMonitorStateWrapper {
   data: MonitorStateCompactedV2
 
   constructor(compactedStateStr: string | null) {
-    if (!compactedStateStr) {
+    if (compactedStateStr === null) {
       this.data = {
         schemaVersion: 2,
         lastUpdate: 0,
@@ -430,6 +430,7 @@ export class CompactedMonitorStateWrapper {
       lastUpdate: this.data.lastUpdate,
       overallUp: this.data.overallUp,
       overallDown: this.data.overallDown,
+      monitoringStartedAt: { ...this.data.monitoringStartedAt },
       incident: {},
       latency: {},
     }
@@ -440,8 +441,6 @@ export class CompactedMonitorStateWrapper {
     ])
     for (const monitorId of monitorIds) {
       const incidents: IncidentRecord[] = []
-      const monitoringStartedAt = this.data.monitoringStartedAt[monitorId]
-      if (monitoringStartedAt !== undefined) incidents.push(dummyIncident(monitoringStartedAt))
       const columns = this.data.incident[monitorId]
       if (columns) {
         for (let index = 0; index < columns.id.length; index++) {

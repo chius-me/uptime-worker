@@ -177,6 +177,7 @@ export type DataPayload = {
   config: PageConfig
   monitorsConfig: Pick<MonitorTarget, 'id' | 'name' | 'tooltip' | 'statusPageLink' | 'hideLatencyChart'>[]
   state: {
+    monitoringStartedAt: Record<string, number>
     incident: Record<string, PublicIncident[]>
     latency: Record<string, PublicLatencyRecord[]>
   }
@@ -196,6 +197,7 @@ export type MonitorState = {
   lastUpdate: number
   overallUp: number
   overallDown: number
+  monitoringStartedAt?: Record<string, number>
   incident: Record<string, IncidentRecord[]>
   latency: Record<string, LatencyRecord[]> // recent 12 hour data, N min interval
 }

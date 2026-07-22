@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CompactedMonitorStateWrapper, CorruptStateError } from '../src/store'
+import { CompactedMonitorStateWrapper, CorruptStateError, getFromStore } from '../src/store'
 import type { MonitorStateCompactedV2 } from '../types/config'
 
 const legacyState = {
@@ -106,6 +106,40 @@ describe('versioned compacted state', () => {
     expect(state.getIncident('api', 0).start).toEqual([200])
     state.unshiftIncident('api', { start: [90], end: 90, error: ['dummy'] })
     expect(state.getIncident('api', 0)).toEqual({ start: [90], end: 90, error: ['dummy'] })
+  })
+
+  it('migrates row-oriented v1 state to v2', () => {
+    const state = new CompactedMonitorStateWrapper(JSON.stringify({
+      lastUpdate: 220,
+      overallUp: 1,
+      overallDown: 0,
+      incident: {
+        api: [
+          { start: [100], end: 100, error: ['dummy'] },
+          { start: [200], end: 210, error: ['Timeout: deadline exceeded'] },
+        ],
+      },
+      latency: { api: [{ time: 220, ping: 42, loc: 'SFO' }] },
+    }))
+
+    expect(state.data).toMatchObject({
+      schemaVersion: 2,
+      monitoringStartedAt: { api: 100 },
+    })
+    expect(state.data.incident.api.id).toEqual(['api:200'])
+    expect(state.uncompact().latency.api).toEqual([{ time: 220, ping: 42, loc: 'SFO' }])
+    expect(state.getCompactedStateStr()).not.toContain('dummy')
+  })
+
+  it('treats an empty stored string as corrupt and preserves it when reading D1', async () => {
+    const env = {
+      UPTIME_WORKER_D1: {
+        prepare: () => ({ bind: () => ({ first: async () => ({ value: '' }) }) }),
+      },
+    } as any
+
+    await expect(getFromStore(env, 'state')).resolves.toBe('')
+    expect(() => new CompactedMonitorStateWrapper('')).toThrow(CorruptStateError)
   })
 
   it.each([

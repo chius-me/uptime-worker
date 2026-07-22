@@ -104,3 +104,76 @@ git diff --check: exit 0
 ## Concerns
 
 None for Task 5. Task 6 still needs to set `lastRun`, activate v2 transitions in the scheduled orchestrator, persist delivery confirmations, and enforce down-delivered-before-recovery dispatch ordering.
+
+## Review remediation: public baseline and empty-state corruption
+
+### Scope
+
+- Removed synthetic/migrated dummy incidents from the API incident projection and monitor summaries.
+- Added a public `state.monitoringStartedAt` map, filtered to configured monitor IDs, so the non-incident monitoring baseline remains available without fabricating a `Connection failed` incident.
+- Kept the virtual dummy exclusively in the wrapper's legacy `incidentLen`/`getIncident`/mutation view used by the intermediate scheduled code.
+- Changed D1 reads to preserve an empty stored string and changed the wrapper to treat only `null` as absence. Empty strings now fail JSON parsing as `CorruptStateError` and map to the same secured, non-cacheable 503 on data, badge, and health APIs.
+- Added explicit row-oriented v1 migration coverage and frozen-input transition coverage for both error changes and recovery.
+
+### RED
+
+Command:
+
+```sh
+npx vitest run tests/state-machine.test.ts tests/store.test.ts tests/api.test.ts tests/security.test.ts
+```
+
+Result:
+
+```text
+Test Files  2 failed | 2 passed (4)
+Tests       3 failed | 42 passed (45)
+```
+
+Expected failures:
+
+- `getFromStore` collapsed `''` to `null`.
+- Empty stored state therefore returned HTTP 200 instead of the corruption 503.
+- Migrated v1 dummy state had no public `monitoringStartedAt` baseline and still flowed through the legacy incident projection.
+
+The new row-oriented migration and frozen-input immutability tests passed in this RED run, confirming the existing implementation while closing the missing confidence coverage.
+
+### GREEN
+
+Command:
+
+```sh
+npx vitest run tests/state-machine.test.ts tests/store.test.ts tests/api.test.ts tests/security.test.ts
+```
+
+Result:
+
+```text
+Test Files  4 passed (4)
+Tests       45 passed (45)
+```
+
+### Full verification
+
+Command:
+
+```sh
+npx tsc --noEmit && npm test && git diff --check
+```
+
+Result:
+
+```text
+TypeScript: exit 0
+Full: 11 test files passed, 84 tests passed
+git diff --check: exit 0
+```
+
+### Review-remediation self-review
+
+- Confirmed dummy detection happens before both summary selection and public incident adaptation, so `dummy` cannot be classified as a public connection failure.
+- Confirmed a fresh latency sample with no real incident represents a healthy monitor, while missing latency and stale data remain unknown.
+- Confirmed baseline projection merges migrated v2 metadata with legacy dummy timing and filters removed monitor IDs.
+- Confirmed `uncompact()` carries `monitoringStartedAt` separately and no longer synthesizes dummy rows; only the legacy wrapper index methods retain the virtual marker.
+- Confirmed the empty-string 503 response has the fixed body, `no-store`, JSON/CORS headers, and Task 7 security headers on all three API routes.
+- Confirmed frozen input includes the incident, changes array, and change objects; error-change and recovery transitions operate on copies.

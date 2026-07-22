@@ -153,26 +153,30 @@ function publicPageConfig(page: PageConfig): PageConfig {
   }
 }
 
+function isDummyIncident(incident: IncidentRecord): boolean {
+  return incident.error[0] === 'dummy'
+}
+
 function summaryForMonitor(
   state: MonitorState,
   monitor: MonitorTarget,
   stale: boolean
 ): DataPayload['monitors'][string] {
-  const incidents = state.incident[monitor.id] || []
+  const incidents = (state.incident[monitor.id] || []).filter((incident) => !isDummyIncident(incident))
   const latencies = state.latency[monitor.id] || []
   const lastIncident = incidents[incidents.length - 1]
   const lastLatency = latencies[latencies.length - 1]
 
-  if (stale || !lastIncident || !lastLatency) {
+  if (stale || !lastLatency) {
     return { up: null, latency: null, location: null, message: 'Not checked yet' }
   }
 
-  const up = lastIncident.end !== null
+  const up = !lastIncident || lastIncident.end !== null
   return {
     up,
     latency: lastLatency.ping,
     location: publicLocation(lastLatency.loc, monitor),
-    message: up ? 'OK' : publicMessage(lastIncident.error[lastIncident.error.length - 1] ?? ''),
+    message: up ? 'OK' : publicMessage(lastIncident!.error[lastIncident!.error.length - 1] ?? ''),
   }
 }
 
@@ -185,13 +189,26 @@ export function buildDataPayload(
   const { stale, monitoringStatus } = getMonitoringStatus(state.lastUpdate, now)
   const configuredIds = new Set(monitorsConfig.map(({ id }) => id))
   const monitorById = new Map(monitorsConfig.map((monitor) => [monitor.id, monitor]))
+  const legacyMonitoringStartedAt = Object.fromEntries(
+    Object.entries(state.incident).flatMap(([id, incidents]) => {
+      const dummy = incidents.find(isDummyIncident)
+      return dummy?.start[0] === undefined ? [] : [[id, dummy.start[0]]]
+    })
+  )
+  const monitoringStartedAt = Object.fromEntries(
+    Object.entries({ ...legacyMonitoringStartedAt, ...state.monitoringStartedAt })
+      .filter(([id]) => configuredIds.has(id))
+  )
   const monitors = Object.fromEntries(
     monitorsConfig.map((monitor) => [monitor.id, summaryForMonitor(state, monitor, stale)])
   )
   const incident = Object.fromEntries(
     Object.entries(state.incident)
       .filter(([id]) => configuredIds.has(id))
-      .map(([id, incidents]) => [id, incidents.map((item) => toPublicIncident(id, item))])
+      .map(([id, incidents]) => [
+        id,
+        incidents.filter((item) => !isDummyIncident(item)).map((item) => toPublicIncident(id, item)),
+      ])
   )
   const latency = Object.fromEntries(
     Object.entries(state.latency)
@@ -221,7 +238,7 @@ export function buildDataPayload(
       statusPageLink,
       hideLatencyChart,
     })),
-    state: { incident, latency },
+    state: { monitoringStartedAt, incident, latency },
   }
 }
 

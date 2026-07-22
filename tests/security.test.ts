@@ -132,6 +132,84 @@ describe('worker security boundary', () => {
     }
   })
 
+  it('returns secured no-store 503 responses for an empty stored state string', async () => {
+    workerConfig.passwordProtection = undefined
+    const env = {
+      ...envWithAssets(async () => new Response('asset')),
+      UPTIME_WORKER_D1: {
+        prepare: () => ({ bind: () => ({ first: async () => ({ value: '' }) }) }),
+      },
+    } as any
+    const originalCaches = Object.getOwnPropertyDescriptor(globalThis, 'caches')
+    Object.defineProperty(globalThis, 'caches', {
+      configurable: true,
+      value: { default: { match: async () => undefined, put: async () => undefined } },
+    })
+
+    try {
+      const responses = await Promise.all([
+        worker.fetch(new Request('https://status.example.test/api/data'), env, ctx),
+        worker.fetch(new Request('https://status.example.test/api/badge?id=blog'), env, ctx),
+        worker.fetch(new Request('https://status.example.test/api/health'), env, ctx),
+      ])
+      for (const response of responses) {
+        expect(response.status).toBe(503)
+        expect(response.headers.get('cache-control')).toBe('no-store')
+        expectSecurityHeaders(response)
+        await expect(response.json()).resolves.toEqual({ error: 'State unavailable' })
+      }
+    } finally {
+      if (originalCaches) Object.defineProperty(globalThis, 'caches', originalCaches)
+      else Reflect.deleteProperty(globalThis, 'caches')
+    }
+  })
+
+  it('projects a migrated v1 dummy as a filtered monitoring baseline, not an incident', async () => {
+    workerConfig.passwordProtection = undefined
+    const checkedAt = Math.round(Date.now() / 1000)
+    const baseline = checkedAt - 90 * 24 * 60 * 60
+    const legacy = JSON.stringify({
+      lastUpdate: checkedAt,
+      overallUp: 1,
+      overallDown: 0,
+      incident: {
+        blog: { start: [[baseline]], end: [baseline], error: [['dummy']] },
+        removed: { start: [[baseline]], end: [baseline], error: [['dummy']] },
+      },
+      latency: {
+        blog: { loc: { v: ['SFO'], c: [1] }, ping: '2a00', time: 'e8030000' },
+      },
+    })
+    const env = {
+      ...envWithAssets(async () => new Response('asset')),
+      UPTIME_WORKER_D1: {
+        prepare: () => ({ bind: () => ({ first: async () => ({ value: legacy }) }) }),
+      },
+    } as any
+    const originalCaches = Object.getOwnPropertyDescriptor(globalThis, 'caches')
+    Object.defineProperty(globalThis, 'caches', {
+      configurable: true,
+      value: { default: { match: async () => undefined, put: async () => undefined } },
+    })
+
+    try {
+      const response = await worker.fetch(new Request('https://status.example.test/api/data'), env, ctx)
+      const payload = await response.json() as any
+      const serialized = JSON.stringify(payload)
+
+      expect(response.status).toBe(200)
+      expect(payload.state.monitoringStartedAt).toEqual({ blog: baseline })
+      expect(payload.state.incident.blog).toEqual([])
+      expect(payload.state.monitoringStartedAt.removed).toBeUndefined()
+      expect(payload.monitors.blog).toMatchObject({ up: true, message: 'OK' })
+      expect(serialized).not.toContain('dummy')
+      expect(serialized).not.toContain('Connection failed')
+    } finally {
+      if (originalCaches) Object.defineProperty(globalThis, 'caches', originalCaches)
+      else Reflect.deleteProperty(globalThis, 'caches')
+    }
+  })
+
   it('adds security headers to static assets and explicit SPA fallbacks', async () => {
     workerConfig.passwordProtection = undefined
     const requestedPaths: string[] = []

@@ -126,4 +126,27 @@ describe('incident state machine', () => {
       downEventKey: 'api:100:down',
     })
   })
+
+  it('does not mutate frozen transition input on an error change or recovery', () => {
+    const down = transitionMonitor(empty(), failedProbe('Timeout: deadline exceeded'), 100, 0)
+    const frozenIncident = Object.freeze({
+      ...down.state.incident!,
+      changes: Object.freeze(down.state.incident!.changes.map((change) => Object.freeze({ ...change }))),
+    })
+    const frozenState = Object.freeze({ monitorId: 'api', incident: frozenIncident }) as MonitorTransitionState
+    const before = structuredClone(frozenState)
+
+    const changed = transitionMonitor(
+      frozenState,
+      failedProbe('Unexpected status: expected 200, got 503'),
+      110,
+      0
+    )
+    const recovered = transitionMonitor(frozenState, successfulProbe(42), 120, 0)
+
+    expect(frozenState).toEqual(before)
+    expect(changed.incident?.changes).toHaveLength(2)
+    expect(recovered.incident?.resolvedAt).toBe(120)
+    expect(recovered.events.map(({ eventKey }) => eventKey)).toEqual(['api:100:recovery'])
+  })
 })
