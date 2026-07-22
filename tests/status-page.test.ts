@@ -25,8 +25,8 @@ type Renderers = {
 }
 
 type UptimeRenderers = {
-  drawBars: (monitorId: string, state: unknown) => void
-  calcAndSetUptime: (monitorId: string, state: unknown) => void
+  drawBars: (monitorId: string, state: unknown, updatedAt: number) => void
+  calcAndSetUptime: (monitorId: string, state: unknown, updatedAt: number) => void
 }
 
 const appPath = fileURLToPath(String(new URL('../static/js/app.js', import.meta.url)))
@@ -225,6 +225,54 @@ describe('status page monitoring state', () => {
     expect(html).not.toContain('All systems operational')
   })
 
+  it('never renders a healthy overall state without a known configured monitor', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-22T00:00:00.000Z'))
+    const payload = {
+      schemaVersion: 2,
+      up: 0,
+      down: 0,
+      updatedAt: Math.round(Date.now() / 1_000),
+      stale: false,
+      monitoringStatus: 'healthy',
+      monitors: {},
+      config: { title: 'Status', links: [] },
+      monitorsConfig: [],
+      maintenances: [],
+      state: { monitoringStartedAt: {}, incident: {}, latency: {} },
+    }
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, json: async () => payload })
+    const { dom } = await loadDomApp(appShell, fetchImpl)
+
+    dom.window.document.dispatchEvent(new dom.window.Event('DOMContentLoaded'))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(dom.window.document.querySelector('.overall-status')?.className).toContain('status-warn')
+    expect(dom.window.document.body.textContent).toContain('Monitoring initializing')
+    expect(dom.window.document.body.textContent).not.toContain('All systems operational')
+    dom.window.close()
+  })
+
+  it('renders an empty configured group as unknown instead of green', async () => {
+    const { renderStatusPageHtml } = await loadRenderers()
+    const html = renderStatusPageHtml({
+      up: 1,
+      down: 0,
+      updatedAt: Math.round(Date.now() / 1_000),
+      monitoringStatus: 'healthy',
+      stale: false,
+      monitors: { api: { up: true } },
+      maintenances: [],
+      state: {},
+      monitorsConfig: [{ id: 'api', name: 'API', hideLatencyChart: true }],
+      config: { group: { Empty: ['missing'], Core: ['api'] } },
+    })
+
+    expect(html).toContain('<span>Empty</span>')
+    expect(html).toContain('color:var(--gray)')
+    expect(html).not.toContain('0/0 Operational')
+  })
+
   it('keeps the last good payload but replaces a green claim after 180 seconds of refresh failures', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-22T00:00:00.000Z'))
@@ -323,8 +371,8 @@ describe('uptime baseline rendering', () => {
     const { dom, uptime } = await loadDomApp('<div id="bars-api"></div><div id="uptime-api"></div>')
     const state = { monitoringStartedAt: { api: now - 2 * 86_400 }, incident: { api: [] } }
 
-    uptime.drawBars('api', state)
-    uptime.calcAndSetUptime('api', state)
+    uptime.drawBars('api', state, now)
+    uptime.calcAndSetUptime('api', state, now)
 
     const bars = dom.window.document.querySelectorAll('#bars-api .uptime-bar')
     expect(bars).toHaveLength(90)
@@ -343,7 +391,7 @@ describe('uptime baseline rendering', () => {
       incident: { api: [{ startedAt: now - 100, resolvedAt: now - 50 }] },
     }
 
-    uptime.calcAndSetUptime('api', state)
+    uptime.calcAndSetUptime('api', state, now)
 
     expect(dom.window.document.getElementById('uptime-api')?.textContent).toBe('Overall: 95.00%')
     dom.window.close()
@@ -361,7 +409,7 @@ describe('uptime baseline rendering', () => {
     }
     const expected = ((now - windowStart - 43_200) / (now - windowStart) * 100).toPrecision(4)
 
-    uptime.calcAndSetUptime('api', state)
+    uptime.calcAndSetUptime('api', state, now)
 
     expect(dom.window.document.getElementById('uptime-api')?.textContent).toBe(`Overall: ${expected}%`)
     dom.window.close()
@@ -375,6 +423,7 @@ describe('uptime baseline rendering', () => {
 
     try {
       const { dom, uptime } = await loadDomApp('<div id="bars-api"></div>')
+      const observedAt = Math.round(Date.now() / 1_000)
       const baseline = new Date(2026, 2, 8, 0).getTime() / 1_000
       const incidentStart = new Date(2026, 2, 8, 1, 30).getTime() / 1_000
       const incidentEnd = new Date(2026, 2, 8, 3, 30).getTime() / 1_000
@@ -383,7 +432,7 @@ describe('uptime baseline rendering', () => {
         incident: { api: [{ startedAt: incidentStart, resolvedAt: incidentEnd }] },
       }
 
-      uptime.drawBars('api', state)
+      uptime.drawBars('api', state, observedAt)
 
       const bars = dom.window.document.querySelectorAll('#bars-api .uptime-bar')
       expect(bars[88].textContent).toContain('95.65%')
@@ -413,7 +462,7 @@ describe('uptime baseline rendering', () => {
       }
       const expected = ((now - uptimeStart - downtime) / (now - uptimeStart) * 100).toPrecision(4)
 
-      uptime.calcAndSetUptime('api', state)
+      uptime.calcAndSetUptime('api', state, now)
 
       expect(localWindowStart).toBeLessThan(retentionStart)
       expect(dom.window.document.getElementById('uptime-api')?.textContent).toBe(`Overall: ${expected}%`)
@@ -422,5 +471,52 @@ describe('uptime baseline rendering', () => {
       if (originalTimeZone === undefined) delete process.env.TZ
       else process.env.TZ = originalTimeZone
     }
+  })
+
+  it('does not accrue healthy uptime after a multi-day-old payload endpoint', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-22T12:00:00.000Z'))
+    const observedAt = Math.round(new Date('2026-07-19T12:00:00.000Z').getTime() / 1_000)
+    const baseline = observedAt - 2 * 86_400
+    const { dom, uptime } = await loadDomApp('<div id="bars-api"></div><div id="uptime-api"></div>')
+    const state = {
+      monitoringStartedAt: { api: baseline },
+      incident: { api: [{ startedAt: baseline, resolvedAt: baseline + 43_200 }] },
+      latency: { api: [{ time: observedAt, ping: 42 }] },
+    }
+
+    uptime.drawBars('api', state, observedAt)
+    uptime.calcAndSetUptime('api', state, observedAt)
+
+    const bars = dom.window.document.querySelectorAll('#bars-api .uptime-bar')
+    expect(bars[89].textContent).toContain('No Data')
+    expect(bars[88].textContent).toContain('No Data')
+    expect(bars[87].textContent).toContain('No Data')
+    expect(dom.window.document.getElementById('uptime-api')?.textContent).toBe('Overall: 75.00%')
+    dom.window.close()
+  })
+
+  it('does not accrue open-incident downtime after the last observed sample', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-22T12:00:00.000Z'))
+    const observedAt = Math.round(new Date('2026-07-19T12:00:00.000Z').getTime() / 1_000)
+    const baseline = observedAt - 2 * 86_400
+    const payloadUpdatedAt = observedAt + 6 * 3_600
+    const { dom, uptime } = await loadDomApp('<div id="bars-api"></div><div id="uptime-api"></div>')
+    const state = {
+      monitoringStartedAt: { api: baseline },
+      incident: { api: [{ startedAt: observedAt - 43_200, resolvedAt: null }] },
+      latency: { api: [{ time: observedAt, ping: 42 }] },
+    }
+
+    uptime.drawBars('api', state, payloadUpdatedAt)
+    uptime.calcAndSetUptime('api', state, payloadUpdatedAt)
+
+    const bars = dom.window.document.querySelectorAll('#bars-api .uptime-bar')
+    expect(bars[89].textContent).toContain('No Data')
+    expect(bars[88].textContent).toContain('No Data')
+    expect(bars[87].textContent).toContain('No Data')
+    expect(dom.window.document.getElementById('uptime-api')?.textContent).toBe('Overall: 75.00%')
+    dom.window.close()
   })
 })

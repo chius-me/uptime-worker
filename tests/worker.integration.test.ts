@@ -100,6 +100,22 @@ async function runScheduled(scheduledTime: number): Promise<void> {
   )
 }
 
+async function seedFreshState(sampledMonitorIds: string[]): Promise<number> {
+  const now = Math.round(Date.now() / 1_000)
+  const state = new CompactedMonitorStateWrapper(null)
+  state.data.lastUpdate = now
+  state.data.lastRun = now
+  state.data.overallUp = sampledMonitorIds.length
+  for (const monitorId of sampledMonitorIds) {
+    state.data.monitoringStartedAt[monitorId] = now - 60
+    state.appendLatency(monitorId, { time: now, ping: 42, loc: 'SFO' })
+  }
+  await testEnv.UPTIME_WORKER_D1.prepare(
+    'INSERT INTO uptimeflare (key, value) VALUES (?, ?)'
+  ).bind('state', state.getCompactedStateStr()).run()
+  return now
+}
+
 beforeEach(async () => {
   restoreWorkerConfig()
   await reset()
@@ -175,6 +191,80 @@ describe('Worker runtime integration', () => {
     await expect(response.json()).resolves.toMatchObject({
       monitoringStatus: 'initializing',
       stale: true,
+    })
+  })
+
+  it('keeps fresh zero-monitor data and health initializing', async () => {
+    workerConfig.monitors = []
+    await seedFreshState([])
+
+    const data = await SELF.fetch('https://example.test/api/data')
+    const health = await SELF.fetch('https://example.test/api/health')
+
+    expect(data.status).toBe(200)
+    await expect(data.json()).resolves.toMatchObject({
+      up: 0,
+      down: 0,
+      stale: false,
+      monitoringStatus: 'initializing',
+    })
+    expect(health.status).toBe(503)
+    await expect(health.json()).resolves.toMatchObject({
+      stale: false,
+      monitoringStatus: 'initializing',
+    })
+  })
+
+  it('reports fresh sampled state as healthy through data and health routes', async () => {
+    workerConfig.monitors = [{
+      id: 'api',
+      name: 'API',
+      method: 'GET',
+      target: 'https://api.example',
+    }]
+    await seedFreshState(['api'])
+
+    const data = await SELF.fetch('https://example.test/api/data')
+    const health = await SELF.fetch('https://example.test/api/health')
+
+    expect(data.status).toBe(200)
+    await expect(data.json()).resolves.toMatchObject({
+      up: 1,
+      down: 0,
+      stale: false,
+      monitoringStatus: 'healthy',
+    })
+    expect(health.status).toBe(200)
+    await expect(health.json()).resolves.toMatchObject({
+      stale: false,
+      monitoringStatus: 'healthy',
+    })
+  })
+
+  it('keeps data and health initializing after adding an unsampled monitor', async () => {
+    workerConfig.monitors = [
+      { id: 'api', name: 'API', method: 'GET', target: 'https://api.example' },
+    ]
+    await seedFreshState(['api'])
+
+    const beforeConfigChange = await SELF.fetch('https://example.test/api/data')
+    await expect(beforeConfigChange.json()).resolves.toMatchObject({ monitoringStatus: 'healthy' })
+
+    workerConfig.monitors.push(
+      { id: 'new', name: 'New', method: 'GET', target: 'https://new.example' }
+    )
+    const data = await SELF.fetch('https://example.test/api/data')
+    const health = await SELF.fetch('https://example.test/api/health')
+
+    await expect(data.json()).resolves.toMatchObject({
+      stale: false,
+      monitoringStatus: 'initializing',
+      monitors: { api: { up: true }, new: { up: null } },
+    })
+    expect(health.status).toBe(503)
+    await expect(health.json()).resolves.toMatchObject({
+      stale: false,
+      monitoringStatus: 'initializing',
     })
   })
 

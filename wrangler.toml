@@ -3,6 +3,19 @@ main = "src/index.ts"
 compatibility_date = "2026-05-22"
 compatibility_flags = ["nodejs_compat"]
 
+# Persist only sampled, allowlisted application events. Invocation logs and
+# traces stay off to avoid retaining request metadata or unbounded telemetry.
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 0.01
+invocation_logs = false
+
+[observability.traces]
+enabled = false
+
 # Workers Static Assets — 代替 Cloudflare Pages
 [assets]
 directory = "./static"

@@ -110,7 +110,11 @@ const jsonHeaders = {
 
 async function handleDataAPI(env: Env, ctx: ExecutionContext): Promise<Response> {
   const cache = caches.default
-  const cacheKey = new Request('https://uptime-worker-internal/api/data?schemaVersion=2', { method: 'GET' })
+  const monitorIds = workerConfig.monitors.map(({ id }) => id)
+  const cacheKeyUrl = new URL('https://uptime-worker-internal/api/data')
+  cacheKeyUrl.searchParams.set('schemaVersion', '2')
+  cacheKeyUrl.searchParams.set('monitorIds', JSON.stringify(monitorIds))
+  const cacheKey = new Request(cacheKeyUrl, { method: 'GET' })
 
   const cached = await cache.match(cacheKey)
   if (cached) return cached

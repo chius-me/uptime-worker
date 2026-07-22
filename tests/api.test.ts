@@ -120,6 +120,22 @@ describe('public status API contracts', () => {
     expect(payload.monitors.new.up).toBeNull()
   })
 
+  it('keeps a fresh zero-monitor payload initializing', () => {
+    const payload = buildDataPayload(
+      { ...emptyState, lastUpdate: 1_000 },
+      [],
+      page,
+      1_010
+    )
+
+    expect(payload).toMatchObject({
+      up: 0,
+      down: 0,
+      stale: false,
+      monitoringStatus: 'initializing',
+    })
+  })
+
   it('marks data stale after 180 seconds and makes every monitor unknown', () => {
     const payload = buildDataPayload(stateAt(1_000), [monitor('api')], page, 1_181)
 
@@ -410,10 +426,36 @@ describe('public status API contracts', () => {
   })
 
   it('reports recent monitoring data as healthy', async () => {
-    const health = await handleHealthAPI(envWithState(stateAt(1_000)), 1_180)
+    const health = await handleHealthAPI(envWithState(stateAt(1_000)), 1_180, [monitor('api')])
 
     expect(health.status).toBe(200)
     await expect(health.json()).resolves.toEqual({ monitoringStatus: 'healthy', updatedAt: 1000, stale: false })
+  })
+
+  it('reports a fresh zero-monitor state as initializing', async () => {
+    const health = await handleHealthAPI(envWithState({ ...emptyState, lastUpdate: 1_000 }), 1_010, [])
+
+    expect(health.status).toBe(503)
+    await expect(health.json()).resolves.toEqual({
+      monitoringStatus: 'initializing',
+      updatedAt: 1_000,
+      stale: false,
+    })
+  })
+
+  it('reports a newly configured unsampled monitor as initializing', async () => {
+    const health = await handleHealthAPI(
+      envWithState(stateAt(1_000)),
+      1_010,
+      [monitor('api'), monitor('new')]
+    )
+
+    expect(health.status).toBe(503)
+    await expect(health.json()).resolves.toEqual({
+      monitoringStatus: 'initializing',
+      updatedAt: 1_000,
+      stale: false,
+    })
   })
 
   it('returns a fixed non-cacheable 503 for corrupt stored state', async () => {

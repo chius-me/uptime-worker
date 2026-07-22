@@ -31,7 +31,7 @@ flowchart LR
 
 ## Quick start
 
-1. Fork this repository, clone your fork, then run `npm ci` (Node.js 22 or later).
+1. Fork this repository, clone your fork, then run `npm ci` (Node.js 22.13.0 or later).
 2. Edit `uptime.config.ts` to add your monitors and status-page metadata.
 3. Create the D1 database with `npm run d1:create`, then copy the returned database ID into the `UPTIME_WORKER_D1` binding in `wrangler.toml`. Initialize it with `npm run d1:migrate:remote`.
 4. Validate the artifact with `npm run deploy:dry-run`, then run `npm run deploy` once to create the Worker.

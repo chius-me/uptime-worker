@@ -107,16 +107,16 @@ function renderStatusPage(container) {
   container.innerHTML = renderStatusPageHtml(apiData)
   setupUpcomingMaintenanceToggle()
 
-  const { state, monitorsConfig } = apiData
+  const { state, monitorsConfig, updatedAt } = apiData
 
   // Draw bars and charts after DOM
   requestAnimationFrame(() => {
     monitorsConfig.forEach(m => {
-      drawBars(m.id, state)
+      drawBars(m.id, state, updatedAt)
       if (!m.hideLatencyChart) drawChart(m.id, state)
     })
     // Update uptime % text after bars are drawn
-    monitorsConfig.forEach(m => { calcAndSetUptime(m.id, state) })
+    monitorsConfig.forEach(m => { calcAndSetUptime(m.id, state, updatedAt) })
   })
 }
 
@@ -144,7 +144,9 @@ function monitoringStatusForRender(data, nowSec = Math.round(Date.now() / 1000))
   if (!data.updatedAt) return 'initializing'
   const refreshIsDelayed = lastSuccessfulFetchAt > 0 && nowSec - lastSuccessfulFetchAt >= 180
   if (data.stale || data.monitoringStatus === 'delayed' || nowSec - data.updatedAt > 180 || refreshIsDelayed) return 'delayed'
-  const hasUnknownMonitor = (data.monitorsConfig || []).some(mon => {
+  const configuredMonitors = data.monitorsConfig || []
+  if (configuredMonitors.length === 0) return 'initializing'
+  const hasUnknownMonitor = configuredMonitors.some(mon => {
     const up = data.monitors?.[mon.id]?.up
     return up !== true && up !== false
   })
@@ -207,7 +209,7 @@ function renderStatusPageHtml(data) {
       const mons = monitorsConfig.filter(m => ids.includes(m.id))
       const downC = mons.filter(m => monitors[m.id]?.up === false).length
       const unknownC = mons.filter(m => monitors[m.id]?.up !== true && monitors[m.id]?.up !== false).length
-      const groupUnknown = monitoringStatus === 'delayed' || unknownC > 0
+      const groupUnknown = monitoringStatus === 'delayed' || mons.length === 0 || unknownC > 0
       const gColor = groupUnknown ? 'var(--gray)' : downC === 0 ? 'var(--green)' : downC === mons.length ? 'var(--red)' : 'var(--orange)'
       const groupStatus = groupUnknown
         ? I18N.t('Unknown')
@@ -348,18 +350,29 @@ function retainedHistoryStart(now) {
   return Math.max(oldestLocalDay, now - 90 * 24 * 60 * 60)
 }
 
-function drawBars(monId, state) {
+function monitorObservedAt(monId, state, updatedAt) {
+  if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt) || updatedAt <= 0) return null
+  const latencies = state?.latency?.[monId]
+  const lastSampleAt = Array.isArray(latencies) && latencies.length > 0
+    ? latencies[latencies.length - 1]?.time
+    : null
+  return typeof lastSampleAt === 'number' && Number.isFinite(lastSampleAt)
+    ? Math.min(updatedAt, lastSampleAt)
+    : updatedAt
+}
+
+function drawBars(monId, state, updatedAt) {
   const container = document.getElementById(`bars-${monId}`)
   if (!container) return
 
   const incidents = monitoredIncidents(state, monId)
   const monStart = monitoringBaseline(state, monId, incidents)
-  if (monStart === null) {
+  const observedAt = monitorObservedAt(monId, state, updatedAt)
+  if (monStart === null || observedAt === null) {
     container.innerHTML = ''
     return
   }
 
-  const now = Math.round(Date.now() / 1000)
   const today = new Date()
 
   container.innerHTML = '' // Clear existing
@@ -374,11 +387,11 @@ function drawBars(monId, state) {
         dayStart,
         dayEnd,
         Math.max(monStart, incidentStart(inc)),
-        Math.min(now, incidentEnd(inc) ?? now),
+        Math.min(observedAt, incidentEnd(inc) ?? observedAt),
       )
     }
 
-    const dayMonTime = overlapSeconds(dayStart, dayEnd, monStart, now)
+    const dayMonTime = overlapSeconds(dayStart, dayEnd, monStart, observedAt)
     const pct = dayMonTime > 0 ? ((dayMonTime - dayDown) / dayMonTime * 100) : NaN
 
     const bar = document.createElement('div')
@@ -390,21 +403,21 @@ function drawBars(monId, state) {
   }
 }
 
-function calcAndSetUptime(monId, state) {
+function calcAndSetUptime(monId, state, updatedAt) {
   const el = document.getElementById(`uptime-${monId}`)
   if (!el) return
 
   const incidents = monitoredIncidents(state, monId)
-  const now = Math.round(Date.now() / 1000)
   const monStart = monitoringBaseline(state, monId, incidents)
-  if (monStart === null) return
-  const uptimeStart = Math.max(monStart, retainedHistoryStart(now))
+  const observedAt = monitorObservedAt(monId, state, updatedAt)
+  if (monStart === null || observedAt === null) return
+  const uptimeStart = Math.max(monStart, retainedHistoryStart(observedAt))
 
   let totalDown = 0
   for (const inc of incidents) {
-    totalDown += overlapSeconds(uptimeStart, now, incidentStart(inc), incidentEnd(inc) ?? now)
+    totalDown += overlapSeconds(uptimeStart, observedAt, incidentStart(inc), incidentEnd(inc) ?? observedAt)
   }
-  const totalTime = now - uptimeStart
+  const totalTime = observedAt - uptimeStart
   const pct = totalTime > 0 ? ((totalTime - totalDown) / totalTime * 100).toPrecision(4) : '100.0'
   el.textContent = I18N.t('Overall', { percent: pct })
   el.style.color = barColor(pct)

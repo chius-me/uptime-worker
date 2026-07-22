@@ -127,6 +127,22 @@ export function getMonitoringStatus(lastUpdate: number, now: number): {
   }
 }
 
+export function deriveMonitoringReadiness(
+  lastUpdate: number,
+  now: number,
+  configuredMonitorIds: string[],
+  hasSample: (monitorId: string) => boolean
+): { stale: boolean; monitoringStatus: MonitoringStatus } {
+  const freshness = getMonitoringStatus(lastUpdate, now)
+  if (freshness.monitoringStatus !== 'healthy') return freshness
+
+  const ready = configuredMonitorIds.length > 0 && configuredMonitorIds.every(hasSample)
+  return {
+    stale: false,
+    monitoringStatus: ready ? 'healthy' : 'initializing',
+  }
+}
+
 export function publicLocation(location: string, monitor: MonitorTarget): string | null {
   const proxy = monitor.checkProxy
   if (!proxy || proxy.startsWith('worker://')) {
@@ -188,7 +204,12 @@ export function buildDataPayload(
   page: PageConfig,
   now: number
 ): DataPayload {
-  const { stale, monitoringStatus: storedMonitoringStatus } = getMonitoringStatus(state.lastUpdate, now)
+  const { stale, monitoringStatus } = deriveMonitoringReadiness(
+    state.lastUpdate,
+    now,
+    monitorsConfig.map(({ id }) => id),
+    (monitorId) => (state.latency[monitorId]?.length ?? 0) > 0
+  )
   const configuredIds = new Set(monitorsConfig.map(({ id }) => id))
   const monitorById = new Map(monitorsConfig.map((monitor) => [monitor.id, monitor]))
   const legacyMonitoringStartedAt = Object.fromEntries(
@@ -207,9 +228,6 @@ export function buildDataPayload(
   const monitorSummaries = Object.values(monitors)
   const up = monitorSummaries.filter((summary) => summary.up === true).length
   const down = monitorSummaries.filter((summary) => summary.up === false).length
-  const monitoringStatus = storedMonitoringStatus === 'healthy' && monitorSummaries.some((summary) => summary.up === null)
-    ? 'initializing'
-    : storedMonitoringStatus
   const incident = Object.fromEntries(
     Object.entries(state.incident)
       .filter(([id]) => configuredIds.has(id))
@@ -303,11 +321,20 @@ export async function handleBadgeAPI(request: Request, env: Env, now = Math.roun
   )
 }
 
-export async function handleHealthAPI(env: Env, now = Math.round(Date.now() / 1000)): Promise<Response> {
+export async function handleHealthAPI(
+  env: Env,
+  now = Math.round(Date.now() / 1000),
+  monitorsConfig = workerConfig.monitors
+): Promise<Response> {
   const stateOrResponse = await readMonitorState(env)
   if (stateOrResponse instanceof Response) return stateOrResponse
   const compactedState = stateOrResponse
-  const { stale, monitoringStatus } = getMonitoringStatus(compactedState.data.lastUpdate, now)
+  const { stale, monitoringStatus } = deriveMonitoringReadiness(
+    compactedState.data.lastUpdate,
+    now,
+    monitorsConfig.map(({ id }) => id),
+    (monitorId) => compactedState.latencyLen(monitorId) > 0
+  )
   return new Response(
     JSON.stringify({ monitoringStatus, updatedAt: compactedState.data.lastUpdate, stale }),
     {

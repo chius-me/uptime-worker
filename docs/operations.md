@@ -10,7 +10,7 @@ The cron runs every minute. Query `https://<STATUS_HOST>/api/health` from outsid
 {"monitoringStatus":"healthy","updatedAt":<UNIX_SECONDS>,"stale":false}
 ```
 
-Absent state is `initializing`: it returns HTTP 503 with `monitoringStatus: "initializing"`, `updatedAt: 0`, and `stale: true`. HTTP 503 and `monitoringStatus: "delayed"` means the last state is older than 180 seconds. Corrupt or unreadable state returns HTTP 503 with `{"error":"State unavailable"}`. Alert on any non-200 response.
+Absent state is `initializing`: it returns HTTP 503 with `monitoringStatus: "initializing"`, `updatedAt: 0`, and `stale: true`. A fresh timestamp is not sufficient for readiness: zero configured monitors, or any configured monitor without a persisted sample, also returns HTTP 503 with `monitoringStatus: "initializing"` and `stale: false`. HTTP 503 and `monitoringStatus: "delayed"` means the last state is older than 180 seconds. Corrupt or unreadable state returns HTTP 503 with `{"error":"State unavailable"}`. Alert on any non-200 response.
 
 Set `HEARTBEAT_URL` with `npx wrangler secret put HEARTBEAT_URL`. Configure Healthchecks, Better Stack, or an equivalent external dead-man's switch to expect a ping every 1 minute with a 3-minute grace period. The Worker sends the HTTPS GET only after monitoring state and run metadata have been persisted; a heartbeat proves that boundary was reached, not that monitored systems are healthy.
 
@@ -89,32 +89,37 @@ Allowed log fields are: event name; safe `monitorId`; `runId`; delivery kind; bo
 
 For a custom proxy, allowlist the proxy hostname with `checkProxyAllowedHosts`. The Worker sends only its monitor DTO using `Content-Type: application/json`, does not forward `Authorization` or `Cookie`, and rejects proxy redirects. Review proxy access logs under the same policy.
 
-## Local release rehearsal — 2026-07-22
+`wrangler.toml` enables Workers Logs only for the allowlisted application events above, with a 1% head-sampling rate. Automatic invocation logs and traces are disabled so request metadata and trace payloads are not retained. Sampling reduces stored volume but is not a spending cap; review Cloudflare usage and the configured monitor count before changing the rate.
 
-This record covers a local rehearsal of commit `0d2a6ec` from the `codex/review-remediation` branch. It is **not** evidence of a production deployment or production acceptance. The commands ran with Node.js 26.5.0 and npm 11.17.0 in a clean worktree.
+## Final release candidate — 2026-07-22
 
-### Performed locally
+The only release candidate is the final reviewed head that contains all remediation waves, including the final readiness fixes. Resolve and record its full immutable SHA immediately before building:
 
-- `npm ci --cache /private/tmp/uptime-worker-npm-cache` completed and installed 123 packages. npm reported four high-severity development-toolchain findings and pending install-script approvals; the subsequent test, typecheck, Wrangler, and migration commands completed successfully.
-- `npm run check` passed all 17 test files and 149 tests, followed by `tsc --noEmit` with exit status 0. This includes the containment, probe isolation, state-machine, outbox, static-asset authorization, UI, documentation, and Worker integration gates from the staged plan.
-- `npm run deploy:dry-run` exited 0, read 19 static assets, and reported the expected `RemoteChecker`, `Scheduler`, `UPTIME_WORKER_D1`, and `ASSETS` bindings. It did not upload or deploy anything.
-- The first `npm run d1:migrate:local` applied `0001_initial.sql` and `0002_notification_outbox.sql` to the worktree-local D1 store. A local sentinel row was then inserted into `uptimeflare`. The second migration run reported `No migrations to apply`, and a follow-up query returned both migration names and the unchanged sentinel value `preserved-2026-07-22`.
-- `npx vitest run tests/store.test.ts -t "migrates v1"` passed one focused test with 12 non-matching tests skipped. The test verifies v1 incident and latency preservation, suppression of the dummy incident, and write-back as schema version 2.
-- `npm audit --omit=dev --json` reported zero production-dependency vulnerabilities. The full audit reported four high-severity entries, all from one transitive `sharp <0.35.0` advisory propagated through the development-only path `@cloudflare/vitest-pool-workers -> miniflare -> sharp` and Wrangler; npm reported no fix available. A policy requiring a completely clean full audit remains a release blocker even though the Worker has no production dependency on this path.
+```sh
+RELEASE_COMMIT="$(git rev-parse HEAD)"
+git status --short
+git show --no-patch --format='%H %s' "$RELEASE_COMMIT"
+```
 
-The repository now declares Node.js `>=22.13.0`, matching the Node 22 floor required by jsdom 29.1.1. CI uses the current Node 22 release, and release tooling must honor the declared engine range.
+The worktree must be clean, the subject must be `fix: align health and release readiness`, and the recorded SHA must match the reviewed final-head gate report. Build one immutable artifact from `RELEASE_COMMIT`; do not rebuild from or deploy an earlier intermediate commit. If a staged rollout truly requires different code artifacts, stop and require each artifact to be rebuilt, independently reviewed, and fully verified before it receives its own approval.
 
-### Not performed
+### Local verification record
 
-No remote D1 inspection, export, migration, or Time Travel action was run. No Worker version was uploaded, deployed, promoted, or rolled back. No secret was read or rotated. No real monitor, cron, heartbeat, webhook, or notification was triggered. No production request, Cloudflare log search, observation window, or external health-monitor check was performed. Those steps require an approved production change window and remain open below.
+Fresh final-wave commands ran locally with Node.js 26.5.0 and npm 11.17.0. `npm run check` passed 17 test files and 201 tests, followed by `tsc --noEmit` with exit status 0. `npm run deploy:dry-run` exited 0, read 19 static assets, and reported the expected `RemoteChecker`, `Scheduler`, `UPTIME_WORKER_D1`, and `ASSETS` bindings without uploading or deploying. `npm audit --omit=dev --json` reported zero production-dependency vulnerabilities, and `git diff --check` exited 0. These are local results, not production evidence. Re-run them after checking out the recorded `RELEASE_COMMIT`; the detailed TDD and command record is `.superpowers/sdd/final-wave-d-report.md`.
 
-### Staged production rollout checklist
+### Production status
 
-- [ ] Preflight: use Node 22.13 or newer; re-run clean install, `npm run check`, `npm run deploy:dry-run`, and the dependency-policy review for each exact batch commit below; record the current known-good Worker version, D1 information, recovery timestamp, and portable remote export.
-- [ ] Batch 1 — Tasks 1–3 and 7: deploy reviewed cumulative commit `3f90900` (or an immutable artifact built from it), then record the resulting Worker version as this batch's rollback target. Verify log redaction, stale/unknown API and UI behavior, badge 404 behavior, protected assets, and security headers; observe `/api/health`, API errors, and monitor states for at least 30 minutes.
-- [ ] Batch 2 — Tasks 4–6: apply the reviewed remote migrations before deploying reviewed cumulative commit `c55b055` (or its immutable artifact), then record the resulting Worker version. Verify isolated probe failures, `monitor_runs`, Outbox pending/delivery behavior, and notification deduplication; observe for at least two hours.
-- [ ] Batch 3 — Tasks 8–10: deploy reviewed cumulative commit `0d2a6ec` (or its immutable artifact), then record the resulting Worker version. Verify all five languages, incident history, timezone/DST display, keyboard and reduced-motion behavior, PR CI, and the external dead-man's-switch monitor.
-- [ ] Production acceptance: trigger one approved test monitor through DOWN, grace, and UP; confirm exactly one down event key and one recovery event key. Stop cron long enough to confirm `Monitoring delayed` after 181 seconds, restore cron and confirm healthy status within one run, then search Cloudflare logs for the old token, chat ID, authorization value, and test response body with no matches.
+No production action was performed. No remote D1 inspection, export, migration, or Time Travel action was run. No Worker version was uploaded, deployed, promoted, or rolled back. No secret was read or rotated. No real monitor, cron, heartbeat, webhook, or notification was triggered. No production request, Cloudflare log search, observation window, or external health-monitor check was performed. Those steps require an approved production change window and remain open below.
+
+### One-artifact production rollout checklist
+
+- [ ] Preflight: use Node 22.13.0 or newer; check out the recorded `RELEASE_COMMIT`; require a clean worktree; re-run clean install, `npm run check`, `npm run deploy:dry-run`, the production dependency audit, and independent review. Record the current known-good Worker version, D1 information, recovery timestamp, and portable remote export.
+- [ ] Migration gate: confirm every migration is forward-compatible with the recorded rollback version, then apply the reviewed remote migrations once. Stop on any unexpected schema or data result.
+- [ ] Deploy the one reviewed artifact once and record its Worker version and artifact digest. Do not rebuild between the observation gates below.
+- [ ] Observation gate 1 — status and security, at least 30 minutes: verify log redaction, sampled application-log availability, stale/unknown API and UI behavior, badge 404 behavior, protected assets, security headers, `/api/health`, API errors, and configured monitor states.
+- [ ] Observation gate 2 — scheduler and delivery, at least two additional hours: verify isolated probe failures, `monitor_runs`, Outbox pending/delivery behavior, notification deduplication, and external heartbeat delivery. Continue only if gate 1 remained clean.
+- [ ] Observation gate 3 — presentation and accessibility: verify all five languages, incident history, timezone/DST display, keyboard and reduced-motion behavior, and the external dead-man's-switch monitor. Continue only if gates 1 and 2 remained clean.
+- [ ] Production acceptance: trigger one approved test monitor through DOWN, grace, and UP; confirm exactly one down event key and one recovery event key. Stop cron long enough to confirm `Monitoring delayed` after 181 seconds, then restore cron and confirm healthy status within one run. Review any retained sampled application events for the documented allowlisted schema; the absence of a sampled event is inconclusive and must not be treated as proof of redaction.
 
 ### Rollback criteria and response
 

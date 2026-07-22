@@ -47,6 +47,16 @@ describe('worker security boundary', () => {
     expect(config).toMatch(/not_found_handling\s*=\s*"single-page-application"/)
   })
 
+  it('samples allowlisted application logs without retaining invocation logs or traces', async () => {
+    const config = await readFile(fileURLToPath(String(new URL('../wrangler.toml', import.meta.url))), 'utf8')
+
+    expect(config).toMatch(/\[observability\]\s+enabled\s*=\s*true/)
+    expect(config).toMatch(
+      /\[observability\.logs\][\s\S]*?enabled\s*=\s*true[\s\S]*?head_sampling_rate\s*=\s*0\.01[\s\S]*?invocation_logs\s*=\s*false/
+    )
+    expect(config).toMatch(/\[observability\.traces\]\s+enabled\s*=\s*false/)
+  })
+
   it('requires Basic Auth before requesting protected static assets', async () => {
     workerConfig.passwordProtection = 'admin:secret'
     let assetRequests = 0
