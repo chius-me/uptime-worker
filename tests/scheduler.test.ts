@@ -603,6 +603,29 @@ describe('notification outbox dispatcher', () => {
     expect(output.state.incident.api).toBeUndefined()
   })
 
+  it('leaves a safely-identifiable poison event pending when reconciliation fails', async () => {
+    const row = outboxEvent('down')
+    row.payload = JSON.stringify({
+      ...JSON.parse(row.payload),
+      publicMessage: 'OK',
+    })
+    const fake = dispatchEnv([row], {
+      failConfirmation: true,
+      state: stateForOutbox([row]),
+    })
+
+    const summary = await dispatchPendingNotifications(fake.env, 20, {
+      now: () => 1_000,
+      resolveConfig: () => config,
+      webhookNotify: vi.fn(async () => undefined),
+    })
+
+    expect(summary).toEqual({ attempted: 1, delivered: 0, failed: 1 })
+    expect(row).toMatchObject({ status: 'pending', delivered_at: null, last_error_code: null })
+    expect(fake.getState().incident.api.downEventKey).toEqual(['api:100:down'])
+    expect(fake.terminalUpdates).toEqual([])
+  })
+
   it('terminalizes an orphaned event before webhook delivery', async () => {
     const row = outboxEvent('down')
     const orphanState = stateWithIncident()
@@ -872,5 +895,24 @@ describe('deployment schema', () => {
     expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_due/i)
     expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_delivered/i)
     expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS monitor_runs_completed/i)
+  })
+
+  it('deploys D1 migrations and documents new and compatibility installs', async () => {
+    const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8')
+    const packageJson = JSON.parse(
+      await readFile(new URL('../package.json', import.meta.url), 'utf8')
+    ) as { scripts: Record<string, string> }
+    const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8')
+
+    expect(workflow).toMatch(/wrangler d1 migrations apply uptime_worker_d1 --remote/)
+    expect(workflow).not.toMatch(/wrangler d1 execute[\s\S]*deploy\/init\.sql/)
+    expect(packageJson.scripts['d1:init']).toMatch(
+      /^wrangler d1 migrations apply uptime_worker_d1(?: --local)?$/
+    )
+    expect(packageJson.scripts['d1:init']).not.toContain('deploy/init.sql')
+    expect(readme).toMatch(/new install/i)
+    expect(readme).toMatch(/compatibility install/i)
+    expect(readme).toContain('deploy/init.sql')
+    expect(readme).toContain('wrangler d1 migrations apply uptime_worker_d1 --remote')
   })
 })

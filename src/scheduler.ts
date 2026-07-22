@@ -272,19 +272,24 @@ async function terminalizeOutboxRow(
      WHERE event_key = ? AND status = 'pending'`
   ).bind(now, code, row.event_key)
   if (identity) {
+    let wrapper: CompactedMonitorStateWrapper
     try {
-      const wrapper = new CompactedMonitorStateWrapper(await getFromStore(env, 'state'))
-      if (reconcileTerminalEvent(wrapper.data, identity)) {
+      wrapper = new CompactedMonitorStateWrapper(await getFromStore(env, 'state'))
+    } catch {
+      return
+    }
+    if (reconcileTerminalEvent(wrapper.data, identity)) {
+      try {
         await env.UPTIME_WORKER_D1.batch([
           terminalStatement(),
           env.UPTIME_WORKER_D1.prepare(
             'INSERT INTO uptimeflare (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
           ).bind('state', wrapper.getCompactedStateStr()),
         ])
-        return
+      } catch {
+        // Keep both the state key and Outbox row pending for an atomic retry.
       }
-    } catch {
-      // Pending-key truth remains authoritative if safe state reconciliation is unavailable.
+      return
     }
   }
   await terminalStatement().run()
