@@ -7,6 +7,7 @@ import { validateAndResolveConfig } from './config'
 import { logEvent } from './log'
 import { CompactedMonitorStateWrapper, getFromStore, setToStore } from './store'
 import { isBasicAuthValid } from './auth'
+import { buildDataPayload, handleBadgeAPI, handleHealthAPI } from './api'
 import pLimit from 'p-limit'
 
 export interface Env {
@@ -49,6 +50,9 @@ export default {
     }
     if (url.pathname === '/api/badge') {
       return handleBadgeAPI(request, env)
+    }
+    if (url.pathname === '/api/health') {
+      return handleHealthAPI(env)
     }
 
     // 非 API 路径 → Workers Static Assets（SPA）
@@ -334,7 +338,7 @@ const jsonHeaders = {
 
 async function handleDataAPI(env: Env, ctx: ExecutionContext): Promise<Response> {
   const cache = caches.default
-  const cacheKey = new Request('https://uptime-worker-internal/api/data', { method: 'GET' })
+  const cacheKey = new Request('https://uptime-worker-internal/api/data?schemaVersion=2', { method: 'GET' })
 
   const cached = await cache.match(cacheKey)
   if (cached) return cached
@@ -343,116 +347,19 @@ async function handleDataAPI(env: Env, ctx: ExecutionContext): Promise<Response>
     await getFromStore(env, 'state')
   )
 
-  if (compactedState.data.lastUpdate === 0) {
-    return new Response(JSON.stringify({ error: 'No data available' }), {
-      status: 500,
-      headers: jsonHeaders,
-    })
-  }
-
-  // Uncompact full state for SPA to render 90-day bars & latency chart
+  // Uncompact full state for SPA to render 90-day bars & latency chart.
   const fullState = compactedState.uncompact()
-
-  // Build summary monitors for quick access
-  let monitors: Record<string, { up: boolean; latency: number; location: string; message: string }> = {}
-  for (let monitor of workerConfig.monitors) {
-    const lastIncident = compactedState.getIncident(
-      monitor.id,
-      compactedState.incidentLen(monitor.id) - 1
-    )
-    const isUp = lastIncident?.end !== null
-    const latency = compactedState.getLastLatency(monitor.id)
-    monitors[monitor.id] = {
-      up: isUp,
-      latency: latency.ping,
-      location: latency.loc,
-      message: isUp ? 'OK' : lastIncident?.error[lastIncident.error.length - 1],
-    }
+  const payload = {
+    ...buildDataPayload(fullState, workerConfig.monitors, pageConfig || {}, Math.round(Date.now() / 1000)),
+    maintenances,
   }
-
-  // Strip monitors of sensitive fields for client
-  const safeMonitors = workerConfig.monitors.map(m => ({
-    id: m.id,
-    name: m.name,
-    tooltip: m.tooltip,
-    statusPageLink: m.statusPageLink,
-    hideLatencyChart: m.hideLatencyChart,
-  }))
+  const cacheControl = payload.stale ? 'no-store' : 's-maxage=30'
 
   const response = new Response(
-    JSON.stringify({
-      up: compactedState.data.overallUp,
-      down: compactedState.data.overallDown,
-      updatedAt: compactedState.data.lastUpdate,
-      monitors,
-      maintenances,
-      config: {
-        title: pageConfig?.title || 'UptimeWorker',
-        links: pageConfig?.links || [],
-        group: pageConfig?.group,
-        logo: pageConfig?.logo,
-        favicon: pageConfig?.favicon,
-        customFooter: pageConfig?.customFooter,
-        maintenances: pageConfig?.maintenances,
-      },
-      monitorsConfig: safeMonitors,
-      // Full state for SPA rendering (incidents + latency time series)
-      state: {
-        incident: fullState.incident,
-        latency: fullState.latency,
-      },
-    }),
-    { headers: { ...jsonHeaders, 'Cache-Control': `s-maxage=${(workerConfig.kvWriteCooldownMinutes ?? 3) * 60}` } }
+    JSON.stringify(payload),
+    { headers: { ...jsonHeaders, 'Cache-Control': cacheControl } }
   )
 
-  ctx.waitUntil(cache.put(cacheKey, response.clone()))
+  if (!payload.stale) ctx.waitUntil(cache.put(cacheKey, response.clone()))
   return response
-}
-
-type BadgePayload = {
-  schemaVersion: 1
-  label: string
-  message: string
-  color: string
-  isError?: boolean
-}
-
-function errorBadge(label: string, message: string): BadgePayload {
-  return { schemaVersion: 1, label, message, color: 'lightgrey', isError: true }
-}
-
-async function handleBadgeAPI(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url)
-
-  const monitorId = url.searchParams.get('id')
-  const label = url.searchParams.get('label') ?? monitorId ?? 'UptimeWorker'
-  const upMsg = url.searchParams.get('up') ?? 'UP'
-  const downMsg = url.searchParams.get('down') ?? 'DOWN'
-  const colorUp = url.searchParams.get('colorUp') ?? 'brightgreen'
-  const colorDown = url.searchParams.get('colorDown') ?? 'red'
-
-  if (!monitorId) {
-    return new Response(JSON.stringify(errorBadge(label, 'no-monitor')), {
-      headers: { ...jsonHeaders, 'Cache-Control': 'no-store' },
-      status: 400,
-    })
-  }
-
-  const compactedState = new CompactedMonitorStateWrapper(
-    await getFromStore(env, 'state')
-  )
-
-  const lastIncident = compactedState.getIncident(monitorId, compactedState.incidentLen(monitorId) - 1)
-  const isUp = lastIncident?.end !== null
-
-  const badge: BadgePayload = {
-    schemaVersion: 1,
-    label,
-    message: isUp ? upMsg : downMsg,
-    color: isUp ? colorUp : colorDown,
-  }
-
-  return new Response(JSON.stringify(badge), {
-    headers: { ...jsonHeaders, 'Cache-Control': 'no-store, max-age=0, must-revalidate' },
-  })
 }

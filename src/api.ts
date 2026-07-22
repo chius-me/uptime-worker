@@ -1,0 +1,246 @@
+import { workerConfig } from '../uptime.config'
+import type {
+  DataPayload,
+  IncidentRecord,
+  MonitorState,
+  MonitorTarget,
+  MonitoringStatus,
+  PageConfig,
+  PublicIncident,
+  PublicMessage,
+} from '../types/config'
+import type { Env } from './index'
+import { CompactedMonitorStateWrapper, getFromStore } from './store'
+
+const STALE_AFTER_SECONDS = 180
+
+const jsonHeaders = {
+  'Content-Type': 'application/json',
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+}
+
+const publicMessages = new Set<PublicMessage>([
+  'Not checked yet',
+  'OK',
+  'Timeout',
+  'Unexpected status code',
+  'TLS validation failed',
+  'Content check failed',
+  'Connection failed',
+])
+
+type V2Incident = {
+  id: string
+  startedAt: number
+  resolvedAt: number | null
+  changes: Array<{ at: number; publicMessage?: string; internalError?: string; error?: string }>
+}
+
+export type BadgePayload = {
+  schemaVersion: 1
+  label: string
+  message: string
+  color: string
+  isError?: boolean
+}
+
+export function publicMessage(error: string): PublicMessage {
+  if (/timeout|abort/i.test(error)) return 'Timeout'
+  if (/status|expected code/i.test(error)) return 'Unexpected status code'
+  if (/tls|certificate/i.test(error)) return 'TLS validation failed'
+  if (/keyword/i.test(error)) return 'Content check failed'
+  return 'Connection failed'
+}
+
+function asPublicMessage(value: string | undefined): PublicMessage {
+  if (value && publicMessages.has(value as PublicMessage)) return value as PublicMessage
+  return publicMessage(value ?? '')
+}
+
+function isV2Incident(incident: IncidentRecord | V2Incident): incident is V2Incident {
+  return 'startedAt' in incident && 'changes' in incident
+}
+
+export function toPublicIncident(monitorId: string, incident: IncidentRecord | V2Incident): PublicIncident {
+  if (isV2Incident(incident)) {
+    const changes = incident.changes.map(({ at, publicMessage: message, internalError, error }) => ({
+      at,
+      publicMessage: asPublicMessage(message ?? internalError ?? error),
+    }))
+    return {
+      id: incident.id,
+      startedAt: incident.startedAt,
+      resolvedAt: incident.resolvedAt,
+      changes,
+      start: changes.map(({ at }) => at),
+      end: incident.resolvedAt,
+      error: changes.map(({ publicMessage: message }) => message),
+    }
+  }
+
+  const startedAt = incident.start[0] ?? 0
+  const changes = incident.error.map((error, index) => ({
+    at: incident.start[index] ?? startedAt,
+    publicMessage: publicMessage(error),
+  }))
+  return {
+    id: `${monitorId}:${startedAt}`,
+    startedAt,
+    resolvedAt: incident.end,
+    changes,
+    start: [...incident.start],
+    end: incident.end,
+    error: changes.map(({ publicMessage: message }) => message),
+  }
+}
+
+export function getMonitoringStatus(lastUpdate: number, now: number): {
+  stale: boolean
+  monitoringStatus: MonitoringStatus
+} {
+  const stale = lastUpdate === 0 || now - lastUpdate > STALE_AFTER_SECONDS
+  return {
+    stale,
+    monitoringStatus: lastUpdate === 0 ? 'initializing' : stale ? 'delayed' : 'healthy',
+  }
+}
+
+function publicPageConfig(page: PageConfig): PageConfig {
+  return {
+    title: page.title || 'UptimeWorker',
+    links: page.links || [],
+    group: page.group,
+    logo: page.logo,
+    favicon: page.favicon,
+    customFooter: page.customFooter,
+    maintenances: page.maintenances,
+  }
+}
+
+function summaryForMonitor(
+  state: MonitorState,
+  monitor: MonitorTarget,
+  stale: boolean
+): DataPayload['monitors'][string] {
+  const incidents = state.incident[monitor.id] || []
+  const latencies = state.latency[monitor.id] || []
+  const lastIncident = incidents[incidents.length - 1]
+  const lastLatency = latencies[latencies.length - 1]
+
+  if (stale || !lastIncident) {
+    return { up: null, latency: null, location: null, message: 'Not checked yet' }
+  }
+
+  const up = lastIncident.end !== null
+  return {
+    up,
+    latency: lastLatency?.ping ?? null,
+    location: lastLatency?.loc ?? null,
+    message: up ? 'OK' : publicMessage(lastIncident.error[lastIncident.error.length - 1] ?? ''),
+  }
+}
+
+export function buildDataPayload(
+  state: MonitorState,
+  monitorsConfig: MonitorTarget[],
+  page: PageConfig,
+  now: number
+): DataPayload {
+  const { stale, monitoringStatus } = getMonitoringStatus(state.lastUpdate, now)
+  const configuredIds = new Set(monitorsConfig.map(({ id }) => id))
+  const monitors = Object.fromEntries(
+    monitorsConfig.map((monitor) => [monitor.id, summaryForMonitor(state, monitor, stale)])
+  )
+  const incident = Object.fromEntries(
+    Object.entries(state.incident)
+      .filter(([id]) => configuredIds.has(id))
+      .map(([id, incidents]) => [id, incidents.map((item) => toPublicIncident(id, item))])
+  )
+  const latency = Object.fromEntries(
+    Object.entries(state.latency)
+      .filter(([id]) => configuredIds.has(id))
+      .map(([id, samples]) => [id, samples])
+  )
+
+  return {
+    schemaVersion: 2,
+    up: state.overallUp,
+    down: state.overallDown,
+    updatedAt: state.lastUpdate,
+    stale,
+    monitoringStatus,
+    monitors,
+    config: publicPageConfig(page),
+    monitorsConfig: monitorsConfig.map(({ id, name, tooltip, statusPageLink, hideLatencyChart }) => ({
+      id,
+      name,
+      tooltip,
+      statusPageLink,
+      hideLatencyChart,
+    })),
+    state: { incident, latency },
+  }
+}
+
+function errorBadge(label: string, message: string): BadgePayload {
+  return { schemaVersion: 1, label, message, color: 'lightgrey', isError: true }
+}
+
+export async function handleBadgeAPI(request: Request, env: Env, now = Math.round(Date.now() / 1000)): Promise<Response> {
+  const url = new URL(request.url)
+  const monitorId = url.searchParams.get('id')
+  const label = url.searchParams.get('label') ?? monitorId ?? 'UptimeWorker'
+  const upMsg = url.searchParams.get('up') ?? 'UP'
+  const downMsg = url.searchParams.get('down') ?? 'DOWN'
+  const colorUp = url.searchParams.get('colorUp') ?? 'brightgreen'
+  const colorDown = url.searchParams.get('colorDown') ?? 'red'
+
+  if (!monitorId) {
+    return new Response(JSON.stringify(errorBadge(label, 'no-monitor')), {
+      status: 400,
+      headers: { ...jsonHeaders, 'Cache-Control': 'no-store' },
+    })
+  }
+  if (!workerConfig.monitors.some((monitor) => monitor.id === monitorId)) {
+    return new Response(JSON.stringify(errorBadge(label, 'unknown-monitor')), {
+      status: 404,
+      headers: { ...jsonHeaders, 'Cache-Control': 'no-store' },
+    })
+  }
+
+  const compactedState = new CompactedMonitorStateWrapper(await getFromStore(env, 'state'))
+  const { stale } = getMonitoringStatus(compactedState.data.lastUpdate, now)
+  if (stale) {
+    return new Response(JSON.stringify({ schemaVersion: 1, label, message: 'unknown', color: 'lightgrey' }), {
+      headers: { ...jsonHeaders, 'Cache-Control': 'no-store, max-age=0, must-revalidate' },
+    })
+  }
+
+  const incidentLength = compactedState.incidentLen(monitorId)
+  if (incidentLength === 0) {
+    return new Response(JSON.stringify({ schemaVersion: 1, label, message: 'unknown', color: 'lightgrey' }), {
+      headers: { ...jsonHeaders, 'Cache-Control': 'no-store, max-age=0, must-revalidate' },
+    })
+  }
+
+  const lastIncident = compactedState.getIncident(monitorId, incidentLength - 1)
+  const up = lastIncident.end !== null
+  return new Response(
+    JSON.stringify({ schemaVersion: 1, label, message: up ? upMsg : downMsg, color: up ? colorUp : colorDown }),
+    { headers: { ...jsonHeaders, 'Cache-Control': 'no-store, max-age=0, must-revalidate' } }
+  )
+}
+
+export async function handleHealthAPI(env: Env, now = Math.round(Date.now() / 1000)): Promise<Response> {
+  const compactedState = new CompactedMonitorStateWrapper(await getFromStore(env, 'state'))
+  const { stale, monitoringStatus } = getMonitoringStatus(compactedState.data.lastUpdate, now)
+  return new Response(
+    JSON.stringify({ monitoringStatus, updatedAt: compactedState.data.lastUpdate, stale }),
+    {
+      status: monitoringStatus === 'healthy' ? 200 : 503,
+      headers: { ...jsonHeaders, 'Cache-Control': 'no-store' },
+    }
+  )
+}

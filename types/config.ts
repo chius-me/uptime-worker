@@ -98,6 +98,56 @@ export type IncidentRecord = {
   error: string[]
 }
 
+export type PublicMessage =
+  | 'Not checked yet'
+  | 'OK'
+  | 'Timeout'
+  | 'Unexpected status code'
+  | 'TLS validation failed'
+  | 'Content check failed'
+  | 'Connection failed'
+
+export type PublicIncidentChange = {
+  at: number
+  publicMessage: PublicMessage
+}
+
+// v1 chart fields are retained until the frontend consumes the v2 fields.
+export type PublicIncident = {
+  id: string
+  startedAt: number
+  resolvedAt: number | null
+  changes: PublicIncidentChange[]
+  start: number[]
+  end: number | null
+  error: PublicMessage[]
+}
+
+export type MonitorSummary = {
+  up: boolean | null
+  latency: number | null
+  location: string | null
+  message: PublicMessage
+}
+
+export type MonitoringStatus = 'initializing' | 'delayed' | 'healthy'
+
+export type DataPayload = {
+  schemaVersion: 2
+  up: number
+  down: number
+  updatedAt: number
+  stale: boolean
+  monitoringStatus: MonitoringStatus
+  monitors: Record<string, MonitorSummary>
+  config: PageConfig
+  monitorsConfig: Pick<MonitorTarget, 'id' | 'name' | 'tooltip' | 'statusPageLink' | 'hideLatencyChart'>[]
+  state: {
+    incident: Record<string, PublicIncident[]>
+    latency: Record<string, LatencyRecord[]>
+  }
+}
+
 export type LatencyRecord = {
   loc: string
   ping: number
