@@ -21,9 +21,17 @@ database_id = "97bbb9eb-3d04-4d5e-b66f-918483619a0c"
 name = "REMOTE_CHECKER_DO"
 class_name = "RemoteChecker"
 
+[[durable_objects.bindings]]
+name = "SCHEDULER_DO"
+class_name = "Scheduler"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["RemoteChecker"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Scheduler"]
 
 # 每分钟跑一次监控
 [triggers]

@@ -91,10 +91,15 @@ function templateWebhookPayload(payload: Record<string, unknown>, message: strin
   }
 }
 
-async function webhookNotify(_env: Env, webhook: WebhookConfig, message: string) {
+async function webhookNotify(
+  _env: Env,
+  webhook: WebhookConfig,
+  message: string,
+  idempotencyKey?: string
+) {
   if (Array.isArray(webhook)) {
     for (const w of webhook) {
-      await webhookNotify(_env, w, message)
+      await webhookNotify(_env, w, message, idempotencyKey)
     }
     return
   }
@@ -107,6 +112,7 @@ async function webhookNotify(_env: Env, webhook: WebhookConfig, message: string)
     let url = webhook.url
 
     let headers = new Headers(webhook.headers as any)
+    if (idempotencyKey !== undefined) headers.set('Idempotency-Key', idempotencyKey)
     let payloadTemplated: { [key: string]: string | number } = JSON.parse(
       JSON.stringify(webhook.payload)
     )

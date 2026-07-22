@@ -1,8 +1,3 @@
-CREATE TABLE IF NOT EXISTS uptimeflare (
-  key TEXT PRIMARY KEY,
-  value BLOB NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS notification_outbox (
   event_key TEXT PRIMARY KEY,
   payload TEXT NOT NULL,

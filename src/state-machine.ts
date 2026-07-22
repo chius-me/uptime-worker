@@ -19,6 +19,7 @@ export type TransitionResult = {
 export type NotificationSuppressionPolicy = {
   maintenanceMonitorIds?: readonly string[]
   skipNotificationIds?: readonly string[]
+  notificationsEnabled?: boolean
 }
 
 function copyIncident(incident: IncidentRecordV2): IncidentRecordV2 {
@@ -124,5 +125,44 @@ export function filterNotificationEvents(
 ): NotificationEvent[] {
   const maintenance = new Set(policy.maintenanceMonitorIds ?? [])
   const skipped = new Set(policy.skipNotificationIds ?? [])
-  return events.filter(({ monitorId }) => !maintenance.has(monitorId) && !skipped.has(monitorId))
+  return events.filter(({ monitorId }) => (
+    policy.notificationsEnabled !== false &&
+    !maintenance.has(monitorId) &&
+    !skipped.has(monitorId)
+  ))
+}
+
+export function applyNotificationSuppression(
+  transition: TransitionResult,
+  policy: NotificationSuppressionPolicy
+): TransitionResult {
+  const events = filterNotificationEvents(transition.events, policy)
+  if (events.length === transition.events.length || transition.incident === null) {
+    return {
+      state: {
+        monitorId: transition.state.monitorId,
+        incident: transition.state.incident ? copyIncident(transition.state.incident) : null,
+      },
+      incident: transition.incident ? copyIncident(transition.incident) : null,
+      events: [...events],
+    }
+  }
+
+  const retainedKeys = new Set(events.map(({ eventKey }) => eventKey))
+  const incident = copyIncident(transition.incident)
+  for (const event of transition.events) {
+    if (retainedKeys.has(event.eventKey)) continue
+    if (event.kind === 'down' && incident.downEventKey === event.eventKey) {
+      incident.downEventKey = null
+    }
+    if (event.kind === 'recovery' && incident.recoveryEventKey === event.eventKey) {
+      incident.recoveryEventKey = null
+    }
+  }
+
+  return {
+    state: { monitorId: transition.state.monitorId, incident },
+    incident,
+    events,
+  }
 }
