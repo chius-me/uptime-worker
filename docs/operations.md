@@ -102,7 +102,7 @@ This record covers a local rehearsal of commit `0d2a6ec` from the `codex/review-
 - `npx vitest run tests/store.test.ts -t "migrates v1"` passed one focused test with 12 non-matching tests skipped. The test verifies v1 incident and latency preservation, suppression of the dummy incident, and write-back as schema version 2.
 - `npm audit --omit=dev --json` reported zero production-dependency vulnerabilities. The full audit reported four high-severity entries, all from one transitive `sharp <0.35.0` advisory propagated through the development-only path `@cloudflare/vitest-pool-workers -> miniflare -> sharp` and Wrangler; npm reported no fix available. A policy requiring a completely clean full audit remains a release blocker even though the Worker has no production dependency on this path.
 
-One compatibility sharp edge remains: `package.json` declares Node.js `>=22`, while jsdom 29.1.1 requires Node.js `^20.19.0 || ^22.13.0 || >=24.0.0`. The rehearsal runtime satisfies both, but Node 22.0–22.12 satisfies the repository declaration and not jsdom's declaration. Pin CI and release tooling to Node 22.13 or newer, or tighten the repository engine range, before relying on the declared floor.
+The repository now declares Node.js `>=22.13.0`, matching the Node 22 floor required by jsdom 29.1.1. CI uses the current Node 22 release, and release tooling must honor the declared engine range.
 
 ### Not performed
 
