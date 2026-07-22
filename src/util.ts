@@ -1,14 +1,24 @@
-import { MonitorTarget, WebhookConfig } from '../types/config'
-import { maintenances, workerConfig } from '../uptime.config'
+import { MonitorTarget, WebhookConfig, WorkerConfig } from '../types/config'
+import { maintenances } from '../uptime.config'
+import { logEvent } from './log'
+import { fetchAndConsumeWithTimeout, readTextLimited } from './probe'
 
-import { Env } from './index'
+import type { Env } from './index'
 
 async function getWorkerLocation() {
-  const res = await fetch('https://cloudflare.com/cdn-cgi/trace')
-  const text = await res.text()
-
-  const colo = /^colo=(.*)$/m.exec(text)?.[1]
-  return colo
+  try {
+    return await fetchAndConsumeWithTimeout(
+      'https://cloudflare.com/cdn-cgi/trace',
+      3000,
+      async (response, signal) => {
+        if (!response.ok) return 'unknown'
+        const text = await readTextLimited(response, 4096, signal)
+        return /^colo=([A-Za-z0-9_-]{1,32})$/m.exec(text)?.[1] ?? 'unknown'
+      }
+    )
+  } catch {
+    return 'unknown'
+  }
 }
 
 const fetchTimeout = (
@@ -17,18 +27,22 @@ const fetchTimeout = (
   { signal, ...options }: RequestInit<RequestInitCfProperties> | undefined = {}
 ): Promise<Response> => {
   const controller = new AbortController()
+  const abort = () => controller.abort()
   const promise = fetch(url, { signal: controller.signal, ...options })
-  if (signal) signal.addEventListener('abort', () => controller.abort())
+  if (signal) signal.addEventListener('abort', abort, { once: true })
   const timeout = setTimeout(() => controller.abort(), ms)
-  return promise.finally(() => clearTimeout(timeout))
+  return promise.finally(() => {
+    clearTimeout(timeout)
+    signal?.removeEventListener('abort', abort)
+  })
 }
 
 function withTimeout<T>(millis: number, promise: Promise<T>): Promise<T> {
-  const timeout = new Promise<T>((resolve, reject) =>
-    setTimeout(() => reject(new Error(`Promise timed out after ${millis}ms`)), millis)
-  )
-
-  return Promise.race([promise, timeout])
+  let timer: ReturnType<typeof setTimeout>
+  const timeout = new Promise<T>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`Promise timed out after ${millis}ms`)), millis)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
 
 function formatStatusChangeNotification(
@@ -77,39 +91,39 @@ function templateWebhookPayload(payload: Record<string, unknown>, message: strin
   }
 }
 
-async function webhookNotify(env: Env, webhook: WebhookConfig, message: string) {
+async function webhookNotify(
+  _env: Env,
+  webhook: WebhookConfig,
+  message: string,
+  idempotencyKey?: string
+) {
   if (Array.isArray(webhook)) {
     for (const w of webhook) {
-      await webhookNotify(env, w, message)
+      await webhookNotify(_env, w, message, idempotencyKey)
     }
     return
   }
 
-  console.log(
-    'Sending webhook notification: ' + JSON.stringify(message) + ' to webhook ' + webhook.url
-  )
+  const host = new URL(webhook.url).hostname
+  const startTime = Date.now()
+  let method = webhook.method ?? 'UNKNOWN'
+  let status: number | null = null
+  let response: Response | undefined
   try {
-    let url = resolveEnvVars(webhook.url, env)
+    let url = webhook.url
 
-    let method = webhook.method
     let headers = new Headers(webhook.headers as any)
+    if (idempotencyKey !== undefined) headers.set('Idempotency-Key', idempotencyKey)
     let payloadTemplated: { [key: string]: string | number } = JSON.parse(
       JSON.stringify(webhook.payload)
     )
-
-    // Replace ENV variables in Payload (e.g., chat id)
-    for (const key of Object.keys(payloadTemplated)) {
-      if (typeof payloadTemplated[key] === 'string') {
-        payloadTemplated[key] = resolveEnvVars(payloadTemplated[key] as string, env)
-      }
-    }
 
     templateWebhookPayload(payloadTemplated as unknown as Record<string, unknown>, message)
     let body = undefined
 
     switch (webhook.payloadType) {
       case 'param':
-        method = method ?? 'GET'
+        method = webhook.method ?? 'GET'
         const urlTmp = new URL(url)
         for (const [k, v] of Object.entries(payloadTemplated)) {
           urlTmp.searchParams.append(k, v.toString())
@@ -117,14 +131,14 @@ async function webhookNotify(env: Env, webhook: WebhookConfig, message: string) 
         url = urlTmp.toString()
         break
       case 'json':
-        method = method ?? 'POST'
+        method = webhook.method ?? 'POST'
         if (headers.get('content-type') === null) {
           headers.set('content-type', 'application/json')
         }
         body = JSON.stringify(payloadTemplated)
         break
       case 'x-www-form-urlencoded':
-        method = method ?? 'POST'
+        method = webhook.method ?? 'POST'
         if (headers.get('content-type') === null) {
           headers.set('content-type', 'application/x-www-form-urlencoded')
         }
@@ -134,28 +148,41 @@ async function webhookNotify(env: Env, webhook: WebhookConfig, message: string) 
         throw 'Unrecognized payload type: ' + webhook.payloadType
     }
 
-    console.log(
-      `Webhook finalized parameters: ${method} ${url}, headers ${JSON.stringify(
-        Object.fromEntries(headers.entries())
-      )}, body ${JSON.stringify(body)}`
-    )
-    const resp = await fetchTimeout(url, webhook.timeout ?? 5000, { method, headers, body })
+    response = await fetchTimeout(url, webhook.timeout ?? 5000, { method, headers, body })
+    status = response.status
 
-    if (!resp.ok) {
-      console.log(
-        'Error calling webhook server, code: ' + resp.status + ', response: ' + (await resp.text())
-      )
-    } else {
-      console.log('Webhook notification sent successfully, code: ' + resp.status)
+    logEvent('webhook_response', {
+      host,
+      method,
+      status,
+      duration: Date.now() - startTime,
+    })
+    if (!response.ok) {
+      throw new Error('Webhook request failed')
     }
-  } catch (e) {
-    console.log('Error calling webhook server: ' + e)
+  } catch {
+    if (status === null) {
+      logEvent('webhook_request_failed', {
+        host,
+        method,
+        status,
+        duration: Date.now() - startTime,
+      })
+    }
+    throw new Error('Webhook request failed')
+  } finally {
+    try {
+      void response?.body?.cancel().catch(() => undefined)
+    } catch {
+      // Response cleanup must not replace delivery success or failure.
+    }
   }
 }
 
 // Auxiliary function to format notification and send it via webhook
 const formatAndNotify = async (
   env: Env,
+  config: WorkerConfig,
   monitor: MonitorTarget,
   isUp: boolean,
   timeIncidentStart: number,
@@ -163,9 +190,9 @@ const formatAndNotify = async (
   reason: string
 ) => {
   // Skip notification if monitor is in the skip list
-  const skipList = workerConfig.notification?.skipNotificationIds
+  const skipList = config.notification?.skipNotificationIds
   if (skipList && skipList.includes(monitor.id)) {
-    console.log(`Skipping notification for ${monitor.name} (${monitor.id} in skipNotificationIds)`)
+    logEvent('notification_skipped', { monitorId: monitor.id, reason: 'skip_list' })
     return
   }
 
@@ -180,29 +207,23 @@ const formatAndNotify = async (
     .flat()
 
   if (maintenanceList.includes(monitor.id)) {
-    console.log(`Skipping notification for ${monitor.name} (in maintenance)`)
+    logEvent('notification_skipped', { monitorId: monitor.id, reason: 'maintenance' })
     return
   }
 
-  if (workerConfig.notification?.webhook) {
+  if (config.notification?.webhook) {
     const notification = formatStatusChangeNotification(
       monitor,
       isUp,
       timeIncidentStart,
       timeNow,
       reason,
-      workerConfig.notification?.timeZone ?? 'Etc/GMT'
+      config.notification?.timeZone ?? 'Etc/GMT'
     )
-    await webhookNotify(env, workerConfig.notification.webhook, notification)
+    await webhookNotify(env, config.notification.webhook, notification)
   } else {
-    console.log(`Webhook not set, skipping notification for ${monitor.name}`)
+    logEvent('notification_skipped', { monitorId: monitor.id, reason: 'webhook_not_configured' })
   }
-}
-
-function resolveEnvVars(template: string, env: Record<string, any>): string {
-  return template.replace(/<([A-Z0-9_]+)>/g, (_match, key) => {
-    return env[key] != null ? String(env[key]) : _match
-  })
 }
 
 export {
@@ -212,5 +233,4 @@ export {
   webhookNotify,
   formatStatusChangeNotification,
   formatAndNotify,
-  resolveEnvVars,
 }

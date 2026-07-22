@@ -2,11 +2,11 @@ import { MaintenanceConfig, PageConfig, WorkerConfig } from './types/config'
 
 const pageConfig: PageConfig = {
   // Title for your status page
-  title: "Chius's Status Page",
+  title: 'Service status',
   // Links shown at the header of your status page, could set `highlight` to `true`
   links: [
-    { link: 'https://github.com/chius-me/', label: 'GitHub' },
-    { link: 'mailto:contact@chius.cc', label: 'Email Me', highlight: true },
+    { link: 'https://example.com', label: 'Homepage' },
+    { link: 'mailto:ops@example.com', label: 'Contact operations', highlight: true },
   ],
   logo: '/logo.png',
 }
@@ -18,29 +18,40 @@ const workerConfig: WorkerConfig = {
       id: 'blog',
       name: 'Blog',
       method: 'GET',
-      target: 'https://chius.cc',
-      tooltip: 'Personal blog',
-      statusPageLink: 'https://chius.cc',
+      target: 'https://service.example',
+      tooltip: 'Public service',
+      statusPageLink: 'https://service.example',
       expectedCodes: [200],
       timeout: 10000,
     },
     {
       id: 'homelab',
-      name: 'HomeLab',
+      name: 'Private service',
       method: 'TCP_PING',
       target: '<HOMELAB_HOST>:<HOMELAB_PORT>',
-      tooltip: 'HomeLab IPv6 connectivity',
+      tooltip: 'Private connectivity',
       timeout: 10000,
     },
     {
       id: 'vps1',
-      name: 'VPS in Qingdao',
+      name: 'Remote TCP service',
       method: 'TCP_PING',
       // 通过 CF Secrets 传入环境变量 <VPS1_IP> 和 <VPS1_PORT>
       target: '<VPS1_IP>:<VPS1_PORT>',
-      tooltip: 'From Aliyun',
+      tooltip: 'TCP availability',
       timeout: 5000,
     },
+    // Custom proxies must be explicitly allowlisted. The Worker sends only a
+    // monitor DTO; never add Authorization or Cookie to forwardHeaders here.
+    // {
+    //   id: 'proxy-check',
+    //   name: 'Proxy-checked service',
+    //   method: 'GET',
+    //   target: 'https://service.example',
+    //   checkProxy: 'https://proxy.example/check',
+    //   checkProxyAllowedHosts: ['proxy.example'],
+    //   timeout: 10000,
+    // },
   ],
   // [Optional] Notification settings
   notification: {

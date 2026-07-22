@@ -1,8 +1,3 @@
-CREATE TABLE IF NOT EXISTS uptimeflare (
-  key TEXT PRIMARY KEY,
-  value BLOB NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS notification_outbox (
   event_key TEXT PRIMARY KEY,
   payload TEXT NOT NULL,
@@ -18,9 +13,6 @@ CREATE INDEX IF NOT EXISTS notification_outbox_due
 
 CREATE INDEX IF NOT EXISTS notification_outbox_delivered
   ON notification_outbox (status, delivered_at, event_key);
-
-CREATE INDEX IF NOT EXISTS notification_outbox_pending_monitor
-  ON notification_outbox (status, event_key);
 
 CREATE TABLE IF NOT EXISTS monitor_runs (
   run_id TEXT PRIMARY KEY,

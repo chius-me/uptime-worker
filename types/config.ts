@@ -45,6 +45,8 @@ export type MonitorTarget = {
   responseForbiddenKeyword?: string
   checkProxy?: string
   checkProxyFallback?: boolean
+  checkProxyAllowedHosts?: string[]
+  forwardHeaders?: string[]
 }
 
 export type WorkerConfig<TEnv = Env> = {
@@ -68,7 +70,7 @@ type SingleWebhook = {
   method?: 'GET' | 'POST' | 'PUT' | 'PATCH'
   headers?: { [key: string]: string | number }
   payloadType: 'param' | 'json' | 'x-www-form-urlencoded'
-  payload: any
+  payload: Record<string, unknown>
   timeout?: number
 }
 
@@ -98,16 +100,104 @@ export type IncidentRecord = {
   error: string[]
 }
 
+export type PublicMessage =
+  | 'Not checked yet'
+  | 'OK'
+  | 'Timeout'
+  | 'Unexpected status code'
+  | 'TLS validation failed'
+  | 'Content check failed'
+  | 'Content check inconclusive'
+  | 'Connection failed'
+
+export type PublicIncidentChange = {
+  at: number
+  publicMessage: PublicMessage
+}
+
+export type ErrorChange = {
+  at: number
+  internalError: string
+  publicMessage: PublicMessage
+}
+
+export type IncidentRecordV2 = {
+  id: string
+  startedAt: number
+  resolvedAt: number | null
+  changes: ErrorChange[]
+  downEventKey: string | null
+  recoveryEventKey: string | null
+  downNotifiedAt: number | null
+  recoveryNotifiedAt: number | null
+}
+
+export type NotificationPayload = {
+  startedAt: number
+  checkedAt: number
+  publicMessage: PublicMessage
+}
+
+export type NotificationEvent = {
+  eventKey: string
+  incidentId: string
+  monitorId: string
+  kind: 'down' | 'recovery'
+  payload: NotificationPayload
+}
+
+// v1 chart fields are retained until the frontend consumes the v2 fields.
+export type PublicIncident = {
+  id: string
+  startedAt: number
+  resolvedAt: number | null
+  changes: PublicIncidentChange[]
+  start: number[]
+  end: number | null
+  error: PublicMessage[]
+}
+
+export type MonitorSummary = {
+  up: boolean | null
+  latency: number | null
+  location: string | null
+  message: PublicMessage
+}
+
+export type MonitoringStatus = 'initializing' | 'delayed' | 'healthy'
+
+export type DataPayload = {
+  schemaVersion: 2
+  up: number
+  down: number
+  updatedAt: number
+  stale: boolean
+  monitoringStatus: MonitoringStatus
+  monitors: Record<string, MonitorSummary>
+  config: PageConfig
+  monitorsConfig: Pick<MonitorTarget, 'id' | 'name' | 'tooltip' | 'statusPageLink' | 'hideLatencyChart'>[]
+  state: {
+    monitoringStartedAt: Record<string, number>
+    incident: Record<string, PublicIncident[]>
+    latency: Record<string, PublicLatencyRecord[]>
+  }
+}
+
 export type LatencyRecord = {
   loc: string
   ping: number
   time: number
 }
 
+export type PublicLatencyRecord = Omit<LatencyRecord, 'loc'> & {
+  loc: string | null
+}
+
 export type MonitorState = {
   lastUpdate: number
   overallUp: number
   overallDown: number
+  monitoringStartedAt?: Record<string, number>
   incident: Record<string, IncidentRecord[]>
   latency: Record<string, LatencyRecord[]> // recent 12 hour data, N min interval
 }
@@ -121,7 +211,7 @@ export type MonitorState = {
 // Real world test with 8 monitors and a few hundred incidents and full latency data (status.lyc8503.net):
 // original: 433KB size, 11.24ms P50 cpu time, 18.11ms P99 cpu time
 // compacted: 181KB size (59% smaller), 6.36ms P50 cpu time (43% faster), 8.86ms P99 cpu time (51% faster)
-export type MonitorStateCompacted = {
+export type MonitorStateCompactedV1 = {
   lastUpdate: number
   overallUp: number
   overallDown: number
@@ -153,3 +243,27 @@ export type MonitorStateCompacted = {
     }
   >
 }
+
+type CompactedIncidentV2 = {
+  id: string[]
+  startedAt: number[]
+  resolvedAt: (number | null)[]
+  changes: ErrorChange[][]
+  downEventKey: (string | null)[]
+  recoveryEventKey: (string | null)[]
+  downNotifiedAt: (number | null)[]
+  recoveryNotifiedAt: (number | null)[]
+}
+
+export type MonitorStateCompactedV2 = {
+  schemaVersion: 2
+  lastUpdate: number
+  lastRun: number
+  overallUp: number
+  overallDown: number
+  monitoringStartedAt: Record<string, number>
+  incident: Record<string, CompactedIncidentV2>
+  latency: MonitorStateCompactedV1['latency']
+}
+
+export type MonitorStateCompacted = MonitorStateCompactedV2

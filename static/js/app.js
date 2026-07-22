@@ -2,7 +2,10 @@
 // Pure Vanilla JS. No frameworks, no build step.
 
 let apiData = null   // from /api/data
-let lastRenderedAt = 0  // track last rendered updatedAt to skip unnecessary re-renders
+let lastRenderedState = ''  // track status state to skip unnecessary re-renders
+let lastSuccessfulFetchAt = 0
+let freshnessTimer = null
+let refreshInProgress = false
 
 // ── SVG Icons ────────────────────────────────────
 const ICONS = {
@@ -30,15 +33,23 @@ function hexToRgb(hex) {
 
 // ── Fetch ────────────────────────────────────────
 async function fetchStatus() {
+  if (refreshInProgress) return false
+  refreshInProgress = true
+  const controller = new AbortController()
+  const requestTimeout = setTimeout(() => controller.abort(), 55000)
   try {
-    const resp = await fetch('/api/data')
+    const resp = await fetch('/api/data', { signal: controller.signal })
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
     apiData = await resp.json()
+    lastSuccessfulFetchAt = Math.round(Date.now() / 1000)
+    scheduleFreshnessRender()
     return true
   } catch (err) {
     console.error('Failed to fetch status:', err)
-    apiData = null
     return false
+  } finally {
+    clearTimeout(requestTimeout)
+    refreshInProgress = false
   }
 }
 
@@ -88,39 +99,89 @@ async function render() {
     renderStatusPage(main)
   }
 
-  lastRenderedAt = apiData.updatedAt
+  lastRenderedState = renderStateKey(apiData)
 }
 
 // ── Status Page ──────────────────────────────────
 function renderStatusPage(container) {
-  const { up, down, updatedAt, monitors, maintenances, state, monitorsConfig, config } = apiData
+  container.innerHTML = renderStatusPageHtml(apiData)
+  setupUpcomingMaintenanceToggle()
 
-  const total = up + down
-  let statusText, iconHtml = ICONS.check
-  let statusClass = 'status-ok'
+  const { state, monitorsConfig, updatedAt } = apiData
 
-  if (total === 0) {
-    statusText = I18N.t('No data yet')
-    iconHtml = ICONS.alert
-    statusClass = 'status-warn'
-  } else if (up === 0) {
-    statusText = I18N.t('All systems not operational')
-    iconHtml = ICONS.alert
-    statusClass = 'status-error'
-  } else if (down === 0) {
-    statusText = I18N.t('All systems operational')
-    statusClass = 'status-ok'
-  } else {
-    statusText = I18N.t('Some systems not operational', { down, total })
-    iconHtml = ICONS.alert
-    statusClass = 'status-warn'
+  // Draw bars and charts after DOM
+  requestAnimationFrame(() => {
+    monitorsConfig.forEach(m => {
+      drawBars(m.id, state, updatedAt)
+      if (!m.hideLatencyChart) drawChart(m.id, state)
+    })
+    // Update uptime % text after bars are drawn
+    monitorsConfig.forEach(m => { calcAndSetUptime(m.id, state, updatedAt) })
+  })
+}
+
+function overallStatus(data) {
+  if (data.monitoringStatus === 'initializing') {
+    return { text: I18N.t('Monitoring initializing'), icon: ICONS.alert, cssClass: 'status-warn' }
   }
+  if (data.monitoringStatus === 'delayed') {
+    return { text: I18N.t('Monitoring delayed'), icon: ICONS.alert, cssClass: 'status-stale' }
+  }
+  if (data.down === 0) {
+    return { text: I18N.t('All systems operational'), icon: ICONS.check, cssClass: 'status-ok' }
+  }
+  if (data.up === 0) {
+    return { text: I18N.t('All systems not operational'), icon: ICONS.alert, cssClass: 'status-error' }
+  }
+  return {
+    text: I18N.t('Some systems not operational', { down: data.down, total: data.up + data.down }),
+    icon: ICONS.alert,
+    cssClass: 'status-warn',
+  }
+}
 
-  const now = Date.now()
-  const nowSec = Math.round(now / 1000)
-  const secondsAgo = updatedAt ? nowSec - updatedAt : 0
+function monitoringStatusForRender(data, nowSec = Math.round(Date.now() / 1000)) {
+  if (!data.updatedAt) return 'initializing'
+  const refreshIsDelayed = lastSuccessfulFetchAt > 0 && nowSec - lastSuccessfulFetchAt >= 180
+  if (data.stale || data.monitoringStatus === 'delayed' || nowSec - data.updatedAt > 180 || refreshIsDelayed) return 'delayed'
+  const configuredMonitors = data.monitorsConfig || []
+  if (configuredMonitors.length === 0) return 'initializing'
+  const hasUnknownMonitor = configuredMonitors.some(mon => {
+    const up = data.monitors?.[mon.id]?.up
+    return up !== true && up !== false
+  })
+  if (data.monitoringStatus === 'initializing' || hasUnknownMonitor) return 'initializing'
+  return 'healthy'
+}
 
-  let html = ''
+function renderStateKey(data) {
+  return [data.updatedAt, data.monitoringStatus, data.stale, monitoringStatusForRender(data)].join(':')
+}
+
+function scheduleFreshnessRender() {
+  if (freshnessTimer) clearTimeout(freshnessTimer)
+  const successfulFetchAt = lastSuccessfulFetchAt
+  freshnessTimer = setTimeout(() => {
+    if (!apiData || lastSuccessfulFetchAt !== successfulFetchAt) return
+    if (renderStateKey(apiData) !== lastRenderedState) render()
+  }, 180000)
+}
+
+function renderStatusPageHtml(data) {
+  const { updatedAt, monitors, maintenances, state, monitorsConfig, config } = data
+  const monitoringStatus = monitoringStatusForRender(data)
+  const status = overallStatus({ ...data, monitoringStatus })
+  const nowSec = Math.round(Date.now() / 1000)
+  const secondsAgo = updatedAt ? Math.max(0, nowSec - updatedAt) : 0
+  const lastCheck = updatedAt
+    ? `${new Date(updatedAt * 1000).toLocaleString()} (${secondsAgo}s ago)`
+    : I18N.t('Unknown')
+
+  let html = `<section class="overall-status ${status.cssClass}">
+    <div class="overall-icon">${status.icon}</div>
+    <div class="status-title">${status.text}</div>
+    <div class="status-subtitle">${I18N.t('Last successful check')}: ${lastCheck}</div>
+  </section>`
 
   // Active maintenances
   const nowDate = new Date()
@@ -131,8 +192,8 @@ function renderStatusPage(container) {
 
   activeM.forEach(m => { html += renderMaintenance(m, false, config) })
   if (upcomingM.length > 0) {
-    html += `<div class="status-subtitle" style="text-align:center;margin-top:8px;cursor:pointer" onclick="UW.toggleUpcoming()">
-      ${I18N.t('upcoming maintenance', { count: upcomingM.length })} <span id="upcoming-toggle" style="text-decoration:underline">${I18N.t('Show')}</span>
+    html += `<div class="status-subtitle upcoming-maintenance-toggle">
+      ${I18N.t('upcoming maintenance', { count: upcomingM.length })} <button type="button" id="upcoming-toggle">${I18N.t('Show')}</button>
     </div>
     <div id="upcoming-list" style="display:none">
       ${upcomingM.map(m => renderMaintenance(m, true, config)).join('')}
@@ -146,32 +207,39 @@ function renderStatusPage(container) {
   if (grouped) {
     Object.entries(group).forEach(([gName, ids]) => {
       const mons = monitorsConfig.filter(m => ids.includes(m.id))
-      const downC = mons.filter(m => monitors[m.id] && !monitors[m.id].up).length
-      const gColor = downC === 0 ? 'var(--green)' : downC === mons.length ? 'var(--red)' : 'var(--orange)'
+      const downC = mons.filter(m => monitors[m.id]?.up === false).length
+      const unknownC = mons.filter(m => monitors[m.id]?.up !== true && monitors[m.id]?.up !== false).length
+      const groupUnknown = monitoringStatus === 'delayed' || mons.length === 0 || unknownC > 0
+      const gColor = groupUnknown ? 'var(--gray)' : downC === 0 ? 'var(--green)' : downC === mons.length ? 'var(--red)' : 'var(--orange)'
+      const groupStatus = groupUnknown
+        ? I18N.t('Unknown')
+        : `${mons.length - downC}/${mons.length} ${I18N.t('Operational')}`
       html += `<details class="monitor-card" open>
         <summary style="cursor:pointer;font-weight:600;display:flex;justify-content:space-between;align-items:center;padding:4px 0">
           <span>${esc(gName)}</span>
-          <span style="color:${gColor};font-family:var(--font-mono);font-size:0.875rem">${mons.length - downC}/${mons.length} ${I18N.t('Operational')}</span>
+          <span style="color:${gColor};font-family:var(--font-mono);font-size:0.875rem">${groupStatus}</span>
         </summary>`
-      mons.forEach(m => { html += renderMonitor(m, monitors[m.id], state) })
+      mons.forEach(m => { html += renderMonitor(m, monitoringStatus === 'delayed' ? { ...monitors[m.id], up: null } : monitors[m.id], state) })
       html += `</details>`
     })
   } else {
     monitorsConfig.forEach(m => {
-      html += `<div class="monitor-card">${renderMonitor(m, monitors[m.id], state)}</div>`
+      html += `<div class="monitor-card">${renderMonitor(m, monitoringStatus === 'delayed' ? { ...monitors[m.id], up: null } : monitors[m.id], state)}</div>`
     })
   }
 
-  container.innerHTML = html
+  return html
+}
 
-  // Draw bars and charts after DOM
-  requestAnimationFrame(() => {
-    monitorsConfig.forEach(m => {
-      drawBars(m.id, state)
-      if (!m.hideLatencyChart) drawChart(m.id, state)
-    })
-    // Update uptime % text after bars are drawn
-    monitorsConfig.forEach(m => { calcAndSetUptime(m.id, state) })
+function setupUpcomingMaintenanceToggle() {
+  const list = document.getElementById('upcoming-list')
+  const toggle = document.getElementById('upcoming-toggle')
+  if (!list || !toggle) return
+
+  toggle.addEventListener('click', () => {
+    const show = list.style.display === 'none'
+    list.style.display = show ? 'block' : 'none'
+    toggle.textContent = show ? I18N.t('Hide') : I18N.t('Show')
   })
 }
 
@@ -193,7 +261,7 @@ function renderMaintenance(m, upcoming, config) {
 }
 
 function statusIcon(status) {
-  const icon = status === 'down' ? ICONS.alert : ICONS.check
+  const icon = status === 'up' ? ICONS.check : ICONS.alert
   return `<span class="monitor-status-icon ${status}">${icon}</span>`
 }
 
@@ -202,12 +270,15 @@ function renderMonitor(mon, monData, state) {
     return `<div class="monitor-header"><div class="monitor-name">${statusIcon('unknown')} ${esc(mon.name)}</div><div class="monitor-uptime">${I18N.t('No data available')}</div></div>`
   }
 
-  const isUp = monData.up
-  const icon = statusIcon(isUp ? 'up' : 'down')
+  const status = monData.up === true ? 'up' : monData.up === false ? 'down' : 'unknown'
+  const icon = statusIcon(status)
 
   const nameHtml = mon.statusPageLink
     ? `<a href="${esc(mon.statusPageLink)}" target="_blank" style="color:inherit;display:flex;align-items:center;gap:8px">${icon} <span>${esc(mon.name)}</span></a>`
     : `<span style="display:flex;align-items:center;gap:8px">${icon} <span>${esc(mon.name)}</span></span>`
+
+  const latencies = state?.latency?.[mon.id] || []
+  const responseSummary = chartSummary(mon.name, latencies)
 
   return `
     <div class="monitor-header">
@@ -217,7 +288,8 @@ function renderMonitor(mon, monData, state) {
     <div class="uptime-bars" id="bars-${mon.id}"></div>
     ${mon.hideLatencyChart ? '' : `
       <div class="chart-container" id="chart-wrap-${mon.id}">
-        <canvas id="chart-${mon.id}"></canvas>
+        <canvas id="chart-${mon.id}" role="img" tabindex="0" aria-label="${esc(I18N.t('Response times'))}: ${esc(mon.name)}" aria-describedby="chart-summary-${mon.id}"></canvas>
+        <p class="sr-only" id="chart-summary-${mon.id}">${esc(responseSummary)}</p>
         <div class="chart-tooltip" id="chart-tooltip-${mon.id}"></div>
       </div>
     `}
@@ -225,64 +297,139 @@ function renderMonitor(mon, monData, state) {
 }
 
 // ── Uptime Bars (90 days) ────────────────────────
-function drawBars(monId, state) {
+function startOfLocalDaySeconds(date = new Date()) {
+  return localDayWindowSeconds(date).start
+}
+
+function localDayWindowSeconds(date = new Date()) {
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  const end = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1)
+  return { start: start.getTime() / 1000, end: end.getTime() / 1000 }
+}
+
+function incidentStart(incident) {
+  return typeof incident?.startedAt === 'number' ? incident.startedAt : incident?.start?.[0]
+}
+
+function incidentEnd(incident) {
+  return typeof incident?.resolvedAt === 'number' || incident?.resolvedAt === null
+    ? incident.resolvedAt
+    : incident?.end
+}
+
+function isMonitoringDummyIncident(incident) {
+  const start = incident?.start
+  const error = incident?.error
+  return Array.isArray(start) && start.length === 1 &&
+    Array.isArray(error) && error.length === 1 && error[0] === 'dummy' &&
+    incident.end !== null && incident.end === start[0]
+}
+
+function monitoredIncidents(state, monId) {
+  return (state?.incident?.[monId] || []).filter(incident =>
+    typeof incidentStart(incident) === 'number' && !isMonitoringDummyIncident(incident)
+  )
+}
+
+function monitoringBaseline(state, monId, incidents) {
+  const baseline = state?.monitoringStartedAt?.[monId]
+  if (typeof baseline === 'number') return baseline
+  if (incidents.length === 0) return null
+  return Math.min(...incidents.map(incidentStart))
+}
+
+function overlapSeconds(x1, x2, y1, y2) {
+  return Math.max(0, Math.min(x2, y2) - Math.max(x1, y1))
+}
+
+function retainedHistoryStart(now) {
+  const today = new Date(now * 1000)
+  const oldestLocalDay = localDayWindowSeconds(
+    new Date(today.getFullYear(), today.getMonth(), today.getDate() - 89)
+  ).start
+  return Math.max(oldestLocalDay, now - 90 * 24 * 60 * 60)
+}
+
+function monitorObservedAt(monId, state, updatedAt) {
+  if (typeof updatedAt !== 'number' || !Number.isFinite(updatedAt) || updatedAt <= 0) return null
+  const latencies = state?.latency?.[monId]
+  const lastSampleAt = Array.isArray(latencies) && latencies.length > 0
+    ? latencies[latencies.length - 1]?.time
+    : null
+  return typeof lastSampleAt === 'number' && Number.isFinite(lastSampleAt)
+    ? Math.min(updatedAt, lastSampleAt)
+    : updatedAt
+}
+
+function drawBars(monId, state, updatedAt) {
   const container = document.getElementById(`bars-${monId}`)
   if (!container) return
 
-  const incidents = state?.incident?.[monId]
-  if (!incidents || incidents.length === 0) {
+  const incidents = monitoredIncidents(state, monId)
+  const monStart = monitoringBaseline(state, monId, incidents)
+  const observedAt = monitorObservedAt(monId, state, updatedAt)
+  if (monStart === null || observedAt === null) {
     container.innerHTML = ''
     return
   }
 
-  const now = Math.round(Date.now() / 1000)
-  const todayStart = Math.floor(Date.now() / 86400000) * 86400
+  const today = new Date()
 
-  function overlap(x1, x2, y1, y2) {
-    return Math.max(0, Math.min(x2, y2) - Math.max(x1, y1))
-  }
-
-  const bars = []
   container.innerHTML = '' // Clear existing
   for (let i = 89; i >= 0; i--) {
-    const dayStart = todayStart - i * 86400
-    const dayEnd = dayStart + 86400
+    const { start: dayStart, end: dayEnd } = localDayWindowSeconds(
+      new Date(today.getFullYear(), today.getMonth(), today.getDate() - i)
+    )
     let dayDown = 0
 
     for (const inc of incidents) {
-      dayDown += overlap(dayStart, dayEnd, inc.start[0], inc.end ?? now)
+      dayDown += overlapSeconds(
+        dayStart,
+        dayEnd,
+        Math.max(monStart, incidentStart(inc)),
+        Math.min(observedAt, incidentEnd(inc) ?? observedAt),
+      )
     }
 
-    // Total monitored time in this day (from first incident start)
-    const monStart = incidents[0].start[0]
-    const dayMonTime = overlap(dayStart, dayEnd, monStart, now)
+    const dayMonTime = overlapSeconds(dayStart, dayEnd, monStart, observedAt)
     const pct = dayMonTime > 0 ? ((dayMonTime - dayDown) / dayMonTime * 100) : NaN
 
     const bar = document.createElement('div')
     bar.className = 'uptime-bar tooltip'
+    bar.tabIndex = 0
     bar.style.background = barColor(pct)
     bar.innerHTML = `<span class="tooltip-text">${isNaN(pct) ? I18N.t('No Data') : pct.toPrecision(4) + '%'}<br>${new Date(dayStart * 1000).toLocaleDateString()}</span>`
     container.appendChild(bar)
   }
 }
 
-function calcAndSetUptime(monId, state) {
+function calcAndSetUptime(monId, state, updatedAt) {
   const el = document.getElementById(`uptime-${monId}`)
   if (!el) return
 
-  const incidents = state?.incident?.[monId]
-  if (!incidents || incidents.length === 0) return
+  const incidents = monitoredIncidents(state, monId)
+  const monStart = monitoringBaseline(state, monId, incidents)
+  const observedAt = monitorObservedAt(monId, state, updatedAt)
+  if (monStart === null || observedAt === null) return
+  const uptimeStart = Math.max(monStart, retainedHistoryStart(observedAt))
 
-  const now = Math.round(Date.now() / 1000)
-  const firstStart = incidents[0].start[0]
   let totalDown = 0
   for (const inc of incidents) {
-    totalDown += (inc.end ?? now) - inc.start[0]
+    totalDown += overlapSeconds(uptimeStart, observedAt, incidentStart(inc), incidentEnd(inc) ?? observedAt)
   }
-  const totalTime = now - firstStart
+  const totalTime = observedAt - uptimeStart
   const pct = totalTime > 0 ? ((totalTime - totalDown) / totalTime * 100).toPrecision(4) : '100.0'
   el.textContent = I18N.t('Overall', { percent: pct })
   el.style.color = barColor(pct)
+}
+
+function chartSummary(monitorName, latencies) {
+  if (!latencies || latencies.length === 0) {
+    return `${I18N.t('Response times')}: ${monitorName}. ${I18N.t('No data available')}`
+  }
+  const values = latencies.map(sample => sample.ping)
+  const latest = values[values.length - 1]
+  return `${I18N.t('Response times')}: ${monitorName}. ${I18N.t('Minimum')}: ${Math.min(...values)} ms. ${I18N.t('Maximum')}: ${Math.max(...values)} ms. ${I18N.t('Latest')}: ${latest} ms.`
 }
 
 // ── Latency Chart (Canvas with Bezier curves & Mouseover Interactive Tooltips) ──
@@ -507,17 +654,99 @@ function drawChart(monId, state, hoverPoint = null) {
 }
 
 // ── Incidents Page ──────────────────────────────
-function renderIncidents(container) {
-  const m = apiData?.maintenances || []
-  if (m.length === 0) {
-    const msg = I18N.t('No incidents')
-    container.innerHTML = `<div class="empty-state">${esc(msg)}</div>`
-    return
+const PUBLIC_INCIDENT_CATEGORIES = new Set([
+  'Not checked yet',
+  'OK',
+  'Timeout',
+  'Unexpected status code',
+  'TLS validation failed',
+  'Content check failed',
+  'Content check inconclusive',
+  'Connection failed',
+])
+
+function localizedIncidentCategory(category) {
+  return PUBLIC_INCIDENT_CATEGORIES.has(category) ? I18N.t(category) : category
+}
+
+function publicIncidentMessage(incident) {
+  const changes = incident?.changes
+  if (Array.isArray(changes) && changes.length > 0) {
+    return changes[changes.length - 1]?.publicMessage || I18N.t('Unknown')
   }
-  let html = `<div class="empty-state">${I18N.t('Incidents history')}</div>`
-  m.forEach(maintenance => {
-    html += renderMaintenance(maintenance, false, apiData.config)
+  if (Array.isArray(incident?.error) && incident.error.length > 0) {
+    return incident.error[incident.error.length - 1]
+  }
+  return I18N.t('Unknown')
+}
+
+function buildIncidentTimeline(state, monitorsConfig, nowSeconds = Math.round(Date.now() / 1000)) {
+  const monitorsById = new Map((monitorsConfig || []).map(monitor => [monitor.id, monitor]))
+  const incidentsByMonitor = state?.incident || {}
+  const incidents = []
+
+  Object.entries(incidentsByMonitor).forEach(([monitorId, monitorIncidents]) => {
+    const monitor = monitorsById.get(monitorId)
+    if (!monitor || !Array.isArray(monitorIncidents)) return
+
+    monitorIncidents.forEach(incident => {
+      const startedAt = incidentStart(incident)
+      if (typeof startedAt !== 'number' || isMonitoringDummyIncident(incident)) return
+      const resolvedAt = incidentEnd(incident) ?? null
+      incidents.push({
+        id: incident.id || `${monitorId}:${startedAt}`,
+        monitorId,
+        monitorName: monitor.name,
+        startedAt,
+        resolvedAt,
+        ongoing: resolvedAt === null,
+        durationSeconds: Math.max(0, (resolvedAt ?? nowSeconds) - startedAt),
+        publicMessage: publicIncidentMessage(incident),
+      })
+    })
   })
+
+  return incidents.sort((left, right) => right.startedAt - left.startedAt)
+}
+
+function formatIncidentDuration(durationSeconds) {
+  const minutes = Math.floor(durationSeconds / 60)
+  const seconds = durationSeconds % 60
+  if (minutes < 1) return `${seconds}s`
+  const hours = Math.floor(minutes / 60)
+  return hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m ${seconds}s`
+}
+
+function renderIncident(incident) {
+  const status = incident.ongoing ? I18N.t('Ongoing') : I18N.t('Resolved')
+  return `<article class="incident-card">
+    <div class="incident-heading">
+      <h2>${esc(incident.monitorName)}</h2>
+      <span class="incident-status ${incident.ongoing ? 'ongoing' : 'resolved'}">${esc(status)}</span>
+    </div>
+    <dl class="incident-details">
+      <div><dt>${esc(I18N.t('Affected service'))}</dt><dd>${esc(incident.monitorName)}</dd></div>
+      <div><dt>${esc(I18N.t('Error category'))}</dt><dd>${esc(localizedIncidentCategory(incident.publicMessage))}</dd></div>
+      <div><dt>${esc(I18N.t('Duration'))}</dt><dd>${esc(formatIncidentDuration(incident.durationSeconds))}</dd></div>
+      <div><dt>${esc(I18N.t('From'))}</dt><dd>${new Date(incident.startedAt * 1000).toLocaleString()}</dd></div>
+      ${incident.resolvedAt === null ? '' : `<div><dt>${esc(I18N.t('To'))}</dt><dd>${new Date(incident.resolvedAt * 1000).toLocaleString()}</dd></div>`}
+    </dl>
+  </article>`
+}
+
+function renderIncidents(container) {
+  const incidents = buildIncidentTimeline(apiData?.state, apiData?.monitorsConfig)
+  const maintenances = apiData?.maintenances || []
+  let html = `<section class="incidents-section" aria-labelledby="incident-history-title">
+    <h1 id="incident-history-title">${esc(I18N.t('Incident history'))}</h1>
+    ${incidents.length > 0 ? incidents.map(renderIncident).join('') : `<div class="empty-state">${esc(I18N.t('No incidents'))}</div>`}
+  </section>`
+  if (maintenances.length > 0) {
+    html += `<section class="incidents-section maintenance-history" aria-labelledby="scheduled-maintenance-title">
+      <h2 id="scheduled-maintenance-title">${esc(I18N.t('Scheduled maintenance'))}</h2>
+      ${maintenances.map(maintenance => renderMaintenance(maintenance, false, apiData.config)).join('')}
+    </section>`
+  }
   container.innerHTML = html
 }
 
@@ -545,18 +774,6 @@ function setupThemeToggle() {
   })
 }
 
-// ── Expose for inline event handlers ─────────────
-window.UW = {
-  toggleUpcoming() {
-    const list = document.getElementById('upcoming-list')
-    const toggle = document.getElementById('upcoming-toggle')
-    if (!list || !toggle) return
-    const show = list.style.display === 'none'
-    list.style.display = show ? 'block' : 'none'
-    toggle.textContent = show ? I18N.t('Hide') : I18N.t('Show')
-  }
-}
-
 // ── Auto-refresh ─────────────────────────────────
 let refreshTimer = null
 function startAutoRefresh() {
@@ -564,7 +781,7 @@ function startAutoRefresh() {
   refreshTimer = setInterval(async () => {
     if (document.hidden) return
     await fetchStatus()
-    if (apiData && apiData.updatedAt !== lastRenderedAt) {
+    if (apiData && renderStateKey(apiData) !== lastRenderedState) {
       render()
     }
   }, 60000)

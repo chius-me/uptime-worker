@@ -1,14 +1,20 @@
 import { DurableObject } from 'cloudflare:workers'
 import { MonitorTarget } from '../types/config'
 import { workerConfig, maintenances, pageConfig } from '../uptime.config'
-import { doMonitor, getStatus } from './monitor'
-import { formatAndNotify, getWorkerLocation, resolveEnvVars } from './util'
-import { CompactedMonitorStateWrapper, getFromStore, setToStore } from './store'
+import { getStatus } from './monitor'
+import { getWorkerLocation } from './util'
+import { logEvent } from './log'
+import { CompactedMonitorStateWrapper, CorruptStateError, getFromStore } from './store'
 import { isBasicAuthValid } from './auth'
-import pLimit from 'p-limit'
+import { buildDataPayload, handleBadgeAPI, handleHealthAPI, stateUnavailableResponse } from './api'
+import { withSecurityHeaders } from './security'
+import type { ProbeStatus } from './probe'
+import { Scheduler } from './scheduler'
+import { resolvePasswordProtection } from './config'
 
 export interface Env {
   REMOTE_CHECKER_DO: DurableObjectNamespace<RemoteChecker>
+  SCHEDULER_DO: DurableObjectNamespace<Scheduler>
   UPTIME_WORKER_D1: D1Database
   ASSETS: Fetcher // Workers Static Assets
   TG_BOT_TOKEN?: string
@@ -17,6 +23,7 @@ export interface Env {
   VPS1_PORT?: string
   HOMELAB_HOST?: string
   HOMELAB_PORT?: string
+  HEARTBEAT_URL?: string
 }
 
 export default {
@@ -26,27 +33,34 @@ export default {
 
     // CORS 预检
     if (request.method === 'OPTIONS') {
-      return new Response(null, {
+      return withSecurityHeaders(new Response(null, {
         headers: {
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Methods': 'GET, OPTIONS',
           'Access-Control-Allow-Headers': 'Content-Type',
         },
-      })
+      }))
     }
 
-    if (!isBasicAuthValid(request.headers.get('Authorization'), workerConfig.passwordProtection)) {
-      return new Response(JSON.stringify({ code: 401, message: 'Not authenticated' }), {
+    const passwordProtection = resolvePasswordProtection(
+      workerConfig.passwordProtection,
+      env as unknown as Record<string, unknown>
+    )
+    if (!isBasicAuthValid(request.headers.get('Authorization'), passwordProtection)) {
+      return withSecurityHeaders(new Response(JSON.stringify({ code: 401, message: 'Not authenticated' }), {
         status: 401,
         headers: { 'WWW-Authenticate': 'Basic', 'Content-Type': 'application/json' },
-      })
+      }))
     }
 
     if (url.pathname === '/api/data') {
-      return handleDataAPI(env, ctx)
+      return withSecurityHeaders(await handleDataAPI(env, ctx))
     }
     if (url.pathname === '/api/badge') {
-      return handleBadgeAPI(request, env)
+      return withSecurityHeaders(await handleBadgeAPI(request, env))
+    }
+    if (url.pathname === '/api/health') {
+      return withSecurityHeaders(await handleHealthAPI(env))
     }
 
     // 非 API 路径 → Workers Static Assets（SPA）
@@ -54,257 +68,18 @@ export default {
     const asset = await env.ASSETS.fetch(request)
     if (asset.status === 404) {
       // SPA 回退：让前端 hash routing 处理
-      return env.ASSETS.fetch(new Request(new URL('/index.html', request.url), request))
+      return withSecurityHeaders(await env.ASSETS.fetch(new Request(new URL('/index.html', request.url), request)))
     }
-    return asset
+    return withSecurityHeaders(asset)
   },
 
-  // ── 定时任务（每分钟跑一次监控）──
-  async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
-    const workerLocation = (await getWorkerLocation()) || 'ERROR'
-    console.log(`Running scheduled event on ${workerLocation}...`)
-
-    // Create a wrapped MonitorState from stored compacted state
-    const state = new CompactedMonitorStateWrapper(await getFromStore(env, 'state'))
-    state.data.overallDown = 0
-    state.data.overallUp = 0
-
-    let statusChanged = false
-    const currentTimeSecond = Math.round(Date.now() / 1000)
-
-    // Parallel check multiple monitors
-    // Max concurrent connection is 6 limited by Cloudflare Workers, we use 5 here to be safe
-    type CheckResult = { id: string; location: string; status: { ping: number; up: boolean; err: string } }
-    let checkQueue: Promise<CheckResult>[] = []
-    let checkResult: Record<string, CheckResult> = {};
-    const limit = pLimit(5);
-    const envWithDefaults = { ...env, VPS1_PORT: env.VPS1_PORT || '22' } as Env
-    for (const rawMonitor of workerConfig.monitors) {
-      const monitor = { ...rawMonitor, target: resolveEnvVars(rawMonitor.target, envWithDefaults) }
-      checkQueue.push(limit(() => doMonitor(monitor, workerLocation, env)))
-    }
-    for (const result of await Promise.all(checkQueue)) {
-      checkResult[result.id] = result
-    }
-
-    // Update each monitor's state based on check results
-    for (const monitor of workerConfig.monitors) {
-      try {
-      console.log(`Processing monitor result: ${monitor.name} (${monitor.id})`)
-
-      let monitorStatusChanged = false
-      const { location: checkLocation, status } = checkResult[monitor.id]
-
-      // Update counters
-      status.up ? state.data.overallUp++ : state.data.overallDown++
-
-      // Update incidents
-      // Create a dummy incident to store the start time of the monitoring and simplify logic
-      if (state.incidentLen(monitor.id) === 0) {
-        state.appendIncident(monitor.id, {
-          start: [currentTimeSecond],
-          end: currentTimeSecond,
-          error: ['dummy'],
-        })
-      }
-
-      // Then lastIncident here must not be null
-      let lastIncident = state.getIncident(monitor.id, state.incidentLen(monitor.id) - 1)
-
-      if (status.up) {
-        // Current status is up
-        // close existing incident if any
-        if (lastIncident.end === null) {
-          lastIncident.end = currentTimeSecond
-          // write back the modified last incident
-          state.setIncident(monitor.id, state.incidentLen(monitor.id) - 1, lastIncident)
-
-          monitorStatusChanged = true
-          try {
-            if (
-              // grace period not set OR ...
-              workerConfig.notification?.gracePeriod === undefined ||
-              // only when we have sent a notification for DOWN status, we will send a notification for UP status (within 30 seconds of possible drift)
-              currentTimeSecond - lastIncident.start[0] >=
-                (workerConfig.notification.gracePeriod + 1) * 60 - 30
-            ) {
-              await formatAndNotify(env, monitor, true, lastIncident.start[0], currentTimeSecond, 'OK')
-            } else {
-              console.log(
-                `grace period (${workerConfig.notification?.gracePeriod}m) not met, skipping webhook UP notification for ${monitor.name}`
-              )
-            }
-
-            console.log('Calling config onStatusChange callback...')
-            await workerConfig.callbacks?.onStatusChange?.(
-              env,
-              monitor,
-              true,
-              lastIncident.start[0],
-              currentTimeSecond,
-              'OK'
-            )
-          } catch (e) {
-            console.log('Error calling callback: ')
-            console.log(e)
-          }
-        }
-      } else {
-        // Current status is down
-        // open new incident if not already open
-        if (lastIncident.end !== null) {
-          state.appendIncident(monitor.id, {
-            start: [currentTimeSecond],
-            end: null,
-            error: [status.err],
-          })
-          monitorStatusChanged = true
-        } else if (lastIncident.end === null && lastIncident.error.slice(-1)[0] !== status.err) {
-          // append if the error message changes
-          lastIncident.start.push(currentTimeSecond)
-          lastIncident.error.push(status.err)
-
-          // write back the modified last incident
-          state.setIncident(monitor.id, state.incidentLen(monitor.id) - 1, lastIncident)
-          monitorStatusChanged = true
-        }
-
-        const currentIncident = state.getIncident(monitor.id, state.incidentLen(monitor.id) - 1)
-        try {
-          if (
-            // monitor status changed AND...
-            (monitorStatusChanged &&
-              // grace period not set OR ...
-              (workerConfig.notification?.gracePeriod === undefined ||
-                // have sent a notification for DOWN status
-                currentTimeSecond - currentIncident.start[0] >=
-                  (workerConfig.notification.gracePeriod + 1) * 60 - 30)) ||
-            // grace period is set AND...
-            (workerConfig.notification?.gracePeriod !== undefined &&
-              // grace period is met
-              currentTimeSecond - currentIncident.start[0] >=
-                workerConfig.notification.gracePeriod * 60 - 30 &&
-              currentTimeSecond - currentIncident.start[0] <
-                workerConfig.notification.gracePeriod * 60 + 30)
-          ) {
-            if (
-              currentIncident.start[0] !== currentTimeSecond &&
-              workerConfig.notification?.skipErrorChangeNotification
-            ) {
-              console.log(
-                'Skipping notification for following error reason change due to user config'
-              )
-            } else {
-              await formatAndNotify(
-                env,
-                monitor,
-                false,
-                currentIncident.start[0],
-                currentTimeSecond,
-                status.err
-              )
-            }
-          } else {
-            console.log(
-              `Grace period (${workerConfig.notification
-                ?.gracePeriod}m) not met or no change (currently down for ${
-                currentTimeSecond - currentIncident.start[0]
-              }s, changed ${monitorStatusChanged}), skipping webhook DOWN notification for ${
-                monitor.name
-              }`
-            )
-          }
-
-          if (monitorStatusChanged) {
-            console.log('Calling config onStatusChange callback...')
-            await workerConfig.callbacks?.onStatusChange?.(
-              env,
-              monitor,
-              false,
-              currentIncident.start[0],
-              currentTimeSecond,
-              status.err
-            )
-          }
-        } catch (e) {
-          console.log('Error calling callback: ')
-          console.log(e)
-        }
-
-        try {
-          console.log('Calling config onIncident callback...')
-          await workerConfig.callbacks?.onIncident?.(
-            env,
-            monitor,
-            currentIncident.start[0],
-            currentTimeSecond,
-            status.err
-          )
-        } catch (e) {
-          console.log('Error calling callback: ')
-          console.log(e)
-        }
-      }
-
-      // append to latency data
-      state.appendLatency(monitor.id, {
-        loc: checkLocation,
-        ping: status.ping,
-        time: currentTimeSecond,
-      })
-
-      // discard old data
-      while (state.getFirstLatency(monitor.id).time < currentTimeSecond - 12 * 60 * 60) {
-        state.unshiftLatency(monitor.id)
-      }
-
-      // discard old incidents
-      while (
-        state.incidentLen(monitor.id) > 0 &&
-        state.getIncident(monitor.id, 0).end &&
-        state.getIncident(monitor.id, 0).end! < currentTimeSecond - 90 * 24 * 60 * 60
-      ) {
-        state.shiftIncident(monitor.id)
-      }
-
-      if (
-        state.incidentLen(monitor.id) === 0 ||
-        (state.getIncident(monitor.id, 0).start[0] > currentTimeSecond - 90 * 24 * 60 * 60 &&
-          state.getIncident(monitor.id, 0).error[0] != 'dummy')
-      ) {
-        // put the dummy incident back
-        state.unshiftIncident(monitor.id, {
-          start: [currentTimeSecond - 90 * 24 * 60 * 60],
-          end: currentTimeSecond - 90 * 24 * 60 * 60,
-          error: ['dummy'],
-        })
-      }
-
-      statusChanged ||= monitorStatusChanged
-      } catch (e) {
-        console.error(`Error processing monitor ${monitor.id}:`, e)
-        continue
-      }
-    }
-
-    console.log(
-      `statusChanged: ${statusChanged}, lastUpdate: ${state.data.lastUpdate}, currentTime: ${currentTimeSecond}`
-    )
-    // Update state
-    // Allow for a cooldown period before writing to storage
-    if (
-      statusChanged ||
-      currentTimeSecond - state.data.lastUpdate >=
-        (workerConfig.kvWriteCooldownMinutes ?? 3) * 60 - 10 // Allow for 10 seconds of clock drift
-    ) {
-      console.log('Updating state...')
-      state.data.lastUpdate = currentTimeSecond
-      await setToStore(env, 'state', state.getCompactedStateStr())
-    } else {
-      console.log('Skipping state update due to cooldown period.')
-    }
+  async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
+    const id = env.SCHEDULER_DO.idFromName('singleton')
+    await env.SCHEDULER_DO.get(id).run(event.scheduledTime)
   },
 }
+
+export { Scheduler }
 
 export class RemoteChecker extends DurableObject {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -313,22 +88,14 @@ export class RemoteChecker extends DurableObject {
 
   async getLocationAndStatus(
     monitor: MonitorTarget
-  ): Promise<{ location: string; status: { ping: number; up: boolean; err: string } }> {
-    const colo = (await getWorkerLocation()) as string
-    console.log(`Running remote checker (DurableObject) at ${colo}...`)
+  ): Promise<{ location: string; status: ProbeStatus }> {
+    const colo = await getWorkerLocation()
+    logEvent('remote_checker_started', { monitorId: monitor.id, location: colo })
     const status = await getStatus(monitor)
     return {
       location: colo,
       status: status,
     }
-  }
-
-  async kill() {
-    // Throwing an error in `blockConcurrencyWhile` will terminate the Durable Object instance
-    // https://developers.cloudflare.com/durable-objects/api/state/#blockconcurrencywhile
-    this.ctx.blockConcurrencyWhile(async () => {
-      throw 'killed'
-    })
   }
 }
 
@@ -343,125 +110,36 @@ const jsonHeaders = {
 
 async function handleDataAPI(env: Env, ctx: ExecutionContext): Promise<Response> {
   const cache = caches.default
-  const cacheKey = new Request('https://uptime-worker-internal/api/data', { method: 'GET' })
+  const monitorIds = workerConfig.monitors.map(({ id }) => id)
+  const cacheKeyUrl = new URL('https://uptime-worker-internal/api/data')
+  cacheKeyUrl.searchParams.set('schemaVersion', '2')
+  cacheKeyUrl.searchParams.set('monitorIds', JSON.stringify(monitorIds))
+  const cacheKey = new Request(cacheKeyUrl, { method: 'GET' })
 
   const cached = await cache.match(cacheKey)
   if (cached) return cached
 
-  const compactedState = new CompactedMonitorStateWrapper(
-    await getFromStore(env, 'state')
-  )
-
-  if (compactedState.data.lastUpdate === 0) {
-    return new Response(JSON.stringify({ error: 'No data available' }), {
-      status: 500,
-      headers: jsonHeaders,
-    })
+  let compactedState: CompactedMonitorStateWrapper
+  try {
+    compactedState = new CompactedMonitorStateWrapper(await getFromStore(env, 'state'))
+  } catch (error) {
+    if (error instanceof CorruptStateError) return stateUnavailableResponse()
+    throw error
   }
 
-  // Uncompact full state for SPA to render 90-day bars & latency chart
+  // Uncompact full state for SPA to render 90-day bars & latency chart.
   const fullState = compactedState.uncompact()
-
-  // Build summary monitors for quick access
-  let monitors: Record<string, { up: boolean; latency: number; location: string; message: string }> = {}
-  for (let monitor of workerConfig.monitors) {
-    const lastIncident = compactedState.getIncident(
-      monitor.id,
-      compactedState.incidentLen(monitor.id) - 1
-    )
-    const isUp = lastIncident?.end !== null
-    const latency = compactedState.getLastLatency(monitor.id)
-    monitors[monitor.id] = {
-      up: isUp,
-      latency: latency.ping,
-      location: latency.loc,
-      message: isUp ? 'OK' : lastIncident?.error[lastIncident.error.length - 1],
-    }
+  const payload = {
+    ...buildDataPayload(fullState, workerConfig.monitors, pageConfig || {}, Math.round(Date.now() / 1000)),
+    maintenances,
   }
-
-  // Strip monitors of sensitive fields for client
-  const safeMonitors = workerConfig.monitors.map(m => ({
-    id: m.id,
-    name: m.name,
-    tooltip: m.tooltip,
-    statusPageLink: m.statusPageLink,
-    hideLatencyChart: m.hideLatencyChart,
-  }))
+  const cacheControl = payload.stale ? 'no-store' : 's-maxage=30'
 
   const response = new Response(
-    JSON.stringify({
-      up: compactedState.data.overallUp,
-      down: compactedState.data.overallDown,
-      updatedAt: compactedState.data.lastUpdate,
-      monitors,
-      maintenances,
-      config: {
-        title: pageConfig?.title || 'UptimeWorker',
-        links: pageConfig?.links || [],
-        group: pageConfig?.group,
-        logo: pageConfig?.logo,
-        favicon: pageConfig?.favicon,
-        customFooter: pageConfig?.customFooter,
-        maintenances: pageConfig?.maintenances,
-      },
-      monitorsConfig: safeMonitors,
-      // Full state for SPA rendering (incidents + latency time series)
-      state: {
-        incident: fullState.incident,
-        latency: fullState.latency,
-      },
-    }),
-    { headers: { ...jsonHeaders, 'Cache-Control': `s-maxage=${(workerConfig.kvWriteCooldownMinutes ?? 3) * 60}` } }
+    JSON.stringify(payload),
+    { headers: { ...jsonHeaders, 'Cache-Control': cacheControl } }
   )
 
-  ctx.waitUntil(cache.put(cacheKey, response.clone()))
+  if (!payload.stale) ctx.waitUntil(cache.put(cacheKey, response.clone()))
   return response
-}
-
-type BadgePayload = {
-  schemaVersion: 1
-  label: string
-  message: string
-  color: string
-  isError?: boolean
-}
-
-function errorBadge(label: string, message: string): BadgePayload {
-  return { schemaVersion: 1, label, message, color: 'lightgrey', isError: true }
-}
-
-async function handleBadgeAPI(request: Request, env: Env): Promise<Response> {
-  const url = new URL(request.url)
-
-  const monitorId = url.searchParams.get('id')
-  const label = url.searchParams.get('label') ?? monitorId ?? 'UptimeWorker'
-  const upMsg = url.searchParams.get('up') ?? 'UP'
-  const downMsg = url.searchParams.get('down') ?? 'DOWN'
-  const colorUp = url.searchParams.get('colorUp') ?? 'brightgreen'
-  const colorDown = url.searchParams.get('colorDown') ?? 'red'
-
-  if (!monitorId) {
-    return new Response(JSON.stringify(errorBadge(label, 'no-monitor')), {
-      headers: { ...jsonHeaders, 'Cache-Control': 'no-store' },
-      status: 400,
-    })
-  }
-
-  const compactedState = new CompactedMonitorStateWrapper(
-    await getFromStore(env, 'state')
-  )
-
-  const lastIncident = compactedState.getIncident(monitorId, compactedState.incidentLen(monitorId) - 1)
-  const isUp = lastIncident?.end !== null
-
-  const badge: BadgePayload = {
-    schemaVersion: 1,
-    label,
-    message: isUp ? upMsg : downMsg,
-    color: isUp ? colorUp : colorDown,
-  }
-
-  return new Response(JSON.stringify(badge), {
-    headers: { ...jsonHeaders, 'Cache-Control': 'no-store, max-age=0, must-revalidate' },
-  })
 }

@@ -2,22 +2,30 @@
   "name": "uptime-worker",
   "version": "0.1.0",
   "private": true,
+  "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "description": "Serverless uptime monitoring & status page — pure Cloudflare Workers, zero Pages",
   "scripts": {
     "dev": "wrangler dev --test-scheduled --persist-to ./.wrangler/state",
     "deploy": "wrangler deploy",
     "test": "vitest run",
-    "d1:create": "wrangler d1 create uptimeflare_d1",
-    "d1:init": "wrangler d1 execute uptimeflare_d1 --file=./deploy/init.sql"
+    "typecheck": "tsc --noEmit",
+    "check": "npm test && npm run typecheck",
+    "deploy:dry-run": "wrangler deploy --dry-run",
+    "d1:create": "wrangler d1 create uptime_worker_d1",
+    "d1:migrate:local": "wrangler d1 migrations apply uptime_worker_d1 --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply uptime_worker_d1 --remote"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20250410.0",
+    "@cloudflare/vitest-pool-workers": "^0.18.7",
+    "@cloudflare/workers-types": "^5.20260722.1",
+    "@types/node": "^22.20.1",
+    "jsdom": "^29.1.1",
     "typescript": "^5.0.4",
     "vitest": "^4.1.10",
-    "wrangler": "^4.54.0"
+    "wrangler": "^4.113.0"
   },
   "dependencies": {
     "p-limit": "^7.2.0"

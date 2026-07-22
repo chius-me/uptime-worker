@@ -3,8 +3,25 @@ main = "src/index.ts"
 compatibility_date = "2026-05-22"
 compatibility_flags = ["nodejs_compat"]
 
+# Persist only sampled, allowlisted application events. Invocation logs and
+# traces stay off to avoid retaining request metadata or unbounded telemetry.
+[observability]
+enabled = true
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 0.01
+invocation_logs = false
+
+[observability.traces]
+enabled = false
+
 # Workers Static Assets — 代替 Cloudflare Pages
-assets = { directory = "./static", binding = "ASSETS" }
+[assets]
+directory = "./static"
+binding = "ASSETS"
+run_worker_first = true
+not_found_handling = "single-page-application"
 
 # 用 D1 存监控状态
 [[d1_databases]]
@@ -17,9 +34,17 @@ database_id = "97bbb9eb-3d04-4d5e-b66f-918483619a0c"
 name = "REMOTE_CHECKER_DO"
 class_name = "RemoteChecker"
 
+[[durable_objects.bindings]]
+name = "SCHEDULER_DO"
+class_name = "Scheduler"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["RemoteChecker"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["Scheduler"]
 
 # 每分钟跑一次监控
 [triggers]

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 
 type Monitor = {
   id: string
@@ -15,7 +16,7 @@ type Renderers = {
 }
 
 async function loadRenderers(): Promise<Renderers> {
-  const app = await readFile(new URL('../static/js/app.js', import.meta.url), 'utf8')
+  const app = await readFile(fileURLToPath(String(new URL('../static/js/app.js', import.meta.url))), 'utf8')
   const window = { addEventListener() {}, UW: {} }
   const document = {
     addEventListener() {},
