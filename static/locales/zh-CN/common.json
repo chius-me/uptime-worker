@@ -1,6 +1,10 @@
 {
   "Incidents": "历史故障",
   "No data yet": "暂无数据",
+  "Monitoring initializing": "监控正在初始化",
+  "Monitoring delayed": "监控更新延迟",
+  "Last successful check": "上次成功检查",
+  "Unknown": "未知",
   "All systems not operational": "系统均离线",
   "All systems operational": "系统一切正常",
   "Some systems not operational": "部分系统离线 ({{down}} / {{total}})",

@@ -1,6 +1,10 @@
 {
   "Incidents": "歷來事件",
   "No data yet": "沒有資料",
+  "Monitoring initializing": "監控正在初始化",
+  "Monitoring delayed": "監控更新延遲",
+  "Last successful check": "上次成功檢查",
+  "Unknown": "未知",
   "All systems not operational": "所有服務都已停止運作",
   "All systems operational": "所有服務皆正常運作",
   "Some systems not operational": "部分服務停止運作 ({{down}} / {{total}})",

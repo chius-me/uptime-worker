@@ -245,6 +245,10 @@ html[data-theme="dark"] .theme-toggle-btn .moon-icon { display: none; }
   color: var(--orange);
   animation: pulse-orange 2.5s infinite;
 }
+.overall-status.status-stale .overall-icon {
+  background: var(--orange-bg);
+  color: var(--gray);
+}
 .overall-status.status-error .overall-icon {
   background: var(--red-bg);
   color: var(--red);

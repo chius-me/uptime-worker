@@ -1,6 +1,10 @@
 {
   "Incidents": "Incidents",
   "No data yet": "No data yet",
+  "Monitoring initializing": "Monitoring is initializing",
+  "Monitoring delayed": "Monitoring is delayed",
+  "Last successful check": "Last successful check",
+  "Unknown": "Unknown",
   "All systems not operational": "All systems not operational",
   "All systems operational": "All systems operational",
   "Some systems not operational": "Some systems not operational ({{down}} out of {{total}})",

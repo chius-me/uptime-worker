@@ -2,7 +2,7 @@
 // Pure Vanilla JS. No frameworks, no build step.
 
 let apiData = null   // from /api/data
-let lastRenderedAt = 0  // track last rendered updatedAt to skip unnecessary re-renders
+let lastRenderedState = ''  // track status state to skip unnecessary re-renders
 
 // ── SVG Icons ────────────────────────────────────
 const ICONS = {
@@ -88,39 +88,71 @@ async function render() {
     renderStatusPage(main)
   }
 
-  lastRenderedAt = apiData.updatedAt
+  lastRenderedState = renderStateKey(apiData)
 }
 
 // ── Status Page ──────────────────────────────────
 function renderStatusPage(container) {
-  const { up, down, updatedAt, monitors, maintenances, state, monitorsConfig, config } = apiData
+  container.innerHTML = renderStatusPageHtml(apiData)
 
-  const total = up + down
-  let statusText, iconHtml = ICONS.check
-  let statusClass = 'status-ok'
+  const { state, monitorsConfig } = apiData
 
-  if (total === 0) {
-    statusText = I18N.t('No data yet')
-    iconHtml = ICONS.alert
-    statusClass = 'status-warn'
-  } else if (up === 0) {
-    statusText = I18N.t('All systems not operational')
-    iconHtml = ICONS.alert
-    statusClass = 'status-error'
-  } else if (down === 0) {
-    statusText = I18N.t('All systems operational')
-    statusClass = 'status-ok'
-  } else {
-    statusText = I18N.t('Some systems not operational', { down, total })
-    iconHtml = ICONS.alert
-    statusClass = 'status-warn'
+  // Draw bars and charts after DOM
+  requestAnimationFrame(() => {
+    monitorsConfig.forEach(m => {
+      drawBars(m.id, state)
+      if (!m.hideLatencyChart) drawChart(m.id, state)
+    })
+    // Update uptime % text after bars are drawn
+    monitorsConfig.forEach(m => { calcAndSetUptime(m.id, state) })
+  })
+}
+
+function overallStatus(data) {
+  if (data.monitoringStatus === 'initializing') {
+    return { text: I18N.t('Monitoring initializing'), icon: ICONS.alert, cssClass: 'status-warn' }
   }
+  if (data.monitoringStatus === 'delayed') {
+    return { text: I18N.t('Monitoring delayed'), icon: ICONS.alert, cssClass: 'status-stale' }
+  }
+  if (data.down === 0) {
+    return { text: I18N.t('All systems operational'), icon: ICONS.check, cssClass: 'status-ok' }
+  }
+  if (data.up === 0) {
+    return { text: I18N.t('All systems not operational'), icon: ICONS.alert, cssClass: 'status-error' }
+  }
+  return {
+    text: I18N.t('Some systems not operational', { down: data.down, total: data.up + data.down }),
+    icon: ICONS.alert,
+    cssClass: 'status-warn',
+  }
+}
 
-  const now = Date.now()
-  const nowSec = Math.round(now / 1000)
-  const secondsAgo = updatedAt ? nowSec - updatedAt : 0
+function monitoringStatusForRender(data, nowSec = Math.round(Date.now() / 1000)) {
+  if (!data.updatedAt || data.monitoringStatus === 'initializing') return 'initializing'
+  if (data.stale || data.monitoringStatus === 'delayed' || nowSec - data.updatedAt > 180) return 'delayed'
+  return 'healthy'
+}
 
-  let html = ''
+function renderStateKey(data) {
+  return [data.updatedAt, data.monitoringStatus, data.stale, monitoringStatusForRender(data)].join(':')
+}
+
+function renderStatusPageHtml(data) {
+  const { updatedAt, monitors, maintenances, state, monitorsConfig, config } = data
+  const monitoringStatus = monitoringStatusForRender(data)
+  const status = overallStatus({ ...data, monitoringStatus })
+  const nowSec = Math.round(Date.now() / 1000)
+  const secondsAgo = updatedAt ? Math.max(0, nowSec - updatedAt) : 0
+  const lastCheck = updatedAt
+    ? `${new Date(updatedAt * 1000).toLocaleString()} (${secondsAgo}s ago)`
+    : I18N.t('Unknown')
+
+  let html = `<section class="overall-status ${status.cssClass}">
+    <div class="overall-icon">${status.icon}</div>
+    <div class="status-title">${status.text}</div>
+    <div class="status-subtitle">${I18N.t('Last successful check')}: ${lastCheck}</div>
+  </section>`
 
   // Active maintenances
   const nowDate = new Date()
@@ -146,33 +178,26 @@ function renderStatusPage(container) {
   if (grouped) {
     Object.entries(group).forEach(([gName, ids]) => {
       const mons = monitorsConfig.filter(m => ids.includes(m.id))
-      const downC = mons.filter(m => monitors[m.id] && !monitors[m.id].up).length
-      const gColor = downC === 0 ? 'var(--green)' : downC === mons.length ? 'var(--red)' : 'var(--orange)'
+      const downC = mons.filter(m => monitors[m.id]?.up === false).length
+      const gColor = monitoringStatus !== 'healthy' ? 'var(--gray)' : downC === 0 ? 'var(--green)' : downC === mons.length ? 'var(--red)' : 'var(--orange)'
+      const groupStatus = monitoringStatus !== 'healthy'
+        ? I18N.t('Unknown')
+        : `${mons.length - downC}/${mons.length} ${I18N.t('Operational')}`
       html += `<details class="monitor-card" open>
         <summary style="cursor:pointer;font-weight:600;display:flex;justify-content:space-between;align-items:center;padding:4px 0">
           <span>${esc(gName)}</span>
-          <span style="color:${gColor};font-family:var(--font-mono);font-size:0.875rem">${mons.length - downC}/${mons.length} ${I18N.t('Operational')}</span>
+          <span style="color:${gColor};font-family:var(--font-mono);font-size:0.875rem">${groupStatus}</span>
         </summary>`
-      mons.forEach(m => { html += renderMonitor(m, monitors[m.id], state) })
+      mons.forEach(m => { html += renderMonitor(m, monitoringStatus === 'healthy' ? monitors[m.id] : { ...monitors[m.id], up: null }, state) })
       html += `</details>`
     })
   } else {
     monitorsConfig.forEach(m => {
-      html += `<div class="monitor-card">${renderMonitor(m, monitors[m.id], state)}</div>`
+      html += `<div class="monitor-card">${renderMonitor(m, monitoringStatus === 'healthy' ? monitors[m.id] : { ...monitors[m.id], up: null }, state)}</div>`
     })
   }
 
-  container.innerHTML = html
-
-  // Draw bars and charts after DOM
-  requestAnimationFrame(() => {
-    monitorsConfig.forEach(m => {
-      drawBars(m.id, state)
-      if (!m.hideLatencyChart) drawChart(m.id, state)
-    })
-    // Update uptime % text after bars are drawn
-    monitorsConfig.forEach(m => { calcAndSetUptime(m.id, state) })
-  })
+  return html
 }
 
 function renderMaintenance(m, upcoming, config) {
@@ -193,7 +218,7 @@ function renderMaintenance(m, upcoming, config) {
 }
 
 function statusIcon(status) {
-  const icon = status === 'down' ? ICONS.alert : ICONS.check
+  const icon = status === 'up' ? ICONS.check : ICONS.alert
   return `<span class="monitor-status-icon ${status}">${icon}</span>`
 }
 
@@ -202,8 +227,8 @@ function renderMonitor(mon, monData, state) {
     return `<div class="monitor-header"><div class="monitor-name">${statusIcon('unknown')} ${esc(mon.name)}</div><div class="monitor-uptime">${I18N.t('No data available')}</div></div>`
   }
 
-  const isUp = monData.up
-  const icon = statusIcon(isUp ? 'up' : 'down')
+  const status = monData.up === true ? 'up' : monData.up === false ? 'down' : 'unknown'
+  const icon = statusIcon(status)
 
   const nameHtml = mon.statusPageLink
     ? `<a href="${esc(mon.statusPageLink)}" target="_blank" style="color:inherit;display:flex;align-items:center;gap:8px">${icon} <span>${esc(mon.name)}</span></a>`
@@ -564,7 +589,7 @@ function startAutoRefresh() {
   refreshTimer = setInterval(async () => {
     if (document.hidden) return
     await fetchStatus()
-    if (apiData && apiData.updatedAt !== lastRenderedAt) {
+    if (apiData && renderStateKey(apiData) !== lastRenderedState) {
       render()
     }
   }, 60000)

@@ -1,6 +1,10 @@
 {
   "Incidents": "Vorfälle",
   "No data yet": "Noch keine Daten",
+  "Monitoring initializing": "Überwachung wird initialisiert",
+  "Monitoring delayed": "Überwachung verzögert",
+  "Last successful check": "Letzte erfolgreiche Prüfung",
+  "Unknown": "Unbekannt",
   "All systems not operational": "Nicht alle Systeme funktionsfähig",
   "All systems operational": "Alle Systeme funktionsfähig",
   "Some systems not operational": "Manche Systeme sind nicht funktionsfähig ({{down}} von {{total}})",
