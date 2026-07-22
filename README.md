@@ -10,8 +10,8 @@ Deployments and local development apply the ordered SQL files in `migrations/`. 
 
 1. Create the database with `npm run d1:create`.
 2. Put the returned database ID in `wrangler.toml`.
-3. Initialize the remote database with `wrangler d1 migrations apply uptime_worker_d1 --remote` (or `npm run d1:migrate`).
-4. For local development, run `npm run d1:init` to apply the same migrations locally.
+3. Initialize the remote database with `npm run d1:migrate:remote`.
+4. For local development, run `npm run d1:migrate:local` to apply the same migrations locally.
 
 ### Compatibility install
 

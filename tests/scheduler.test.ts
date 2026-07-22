@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 
 vi.mock('cloudflare:workers', () => ({
   DurableObject: class {},
@@ -877,9 +878,9 @@ describe('external delivery safety', () => {
 
 describe('deployment schema', () => {
   it('keeps RemoteChecker v1 and adds a distinct sqlite Scheduler migration and idempotent D1 tables', async () => {
-    const wrangler = await readFile(new URL('../wrangler.toml', import.meta.url), 'utf8')
-    const initial = await readFile(new URL('../migrations/0001_initial.sql', import.meta.url), 'utf8')
-    const outbox = await readFile(new URL('../migrations/0002_notification_outbox.sql', import.meta.url), 'utf8')
+    const wrangler = await readFile(fileURLToPath(String(new URL('../wrangler.toml', import.meta.url))), 'utf8')
+    const initial = await readFile(fileURLToPath(String(new URL('../migrations/0001_initial.sql', import.meta.url))), 'utf8')
+    const outbox = await readFile(fileURLToPath(String(new URL('../migrations/0002_notification_outbox.sql', import.meta.url))), 'utf8')
 
     expect(wrangler).toMatch(/tag\s*=\s*"v1"[\s\S]*new_sqlite_classes\s*=\s*\["RemoteChecker"\]/)
     expect(wrangler).toMatch(/name\s*=\s*"SCHEDULER_DO"[\s\S]*class_name\s*=\s*"Scheduler"/)
@@ -891,25 +892,29 @@ describe('deployment schema', () => {
     expect(outbox).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_delivered[\s\S]*status\s*,\s*delivered_at\s*,\s*event_key/i)
     expect(outbox).toMatch(/CREATE INDEX IF NOT EXISTS monitor_runs_completed[\s\S]*completed_at\s*,\s*run_id/i)
 
-    const compatibility = await readFile(new URL('../deploy/init.sql', import.meta.url), 'utf8')
+    const compatibility = await readFile(fileURLToPath(String(new URL('../deploy/init.sql', import.meta.url))), 'utf8')
     expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_due/i)
     expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_delivered/i)
     expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS monitor_runs_completed/i)
   })
 
   it('deploys D1 migrations and documents new and compatibility installs', async () => {
-    const workflow = await readFile(new URL('../.github/workflows/deploy.yml', import.meta.url), 'utf8')
+    const workflow = await readFile(fileURLToPath(String(new URL('../.github/workflows/deploy.yml', import.meta.url))), 'utf8')
     const packageJson = JSON.parse(
-      await readFile(new URL('../package.json', import.meta.url), 'utf8')
+      await readFile(fileURLToPath(String(new URL('../package.json', import.meta.url))), 'utf8')
     ) as { scripts: Record<string, string> }
-    const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8')
+    const readme = await readFile(fileURLToPath(String(new URL('../README.md', import.meta.url))), 'utf8')
 
-    expect(workflow).toMatch(/wrangler d1 migrations apply uptime_worker_d1 --remote/)
+    expect(workflow).toMatch(/npm run d1:migrate:remote/)
     expect(workflow).not.toMatch(/wrangler d1 execute[\s\S]*deploy\/init\.sql/)
-    expect(packageJson.scripts['d1:init']).toMatch(
-      /^wrangler d1 migrations apply uptime_worker_d1(?: --local)?$/
+    expect(packageJson.scripts['d1:migrate:local']).toBe(
+      'wrangler d1 migrations apply uptime_worker_d1 --local'
     )
-    expect(packageJson.scripts['d1:init']).not.toContain('deploy/init.sql')
+    expect(packageJson.scripts['d1:migrate:remote']).toBe(
+      'wrangler d1 migrations apply uptime_worker_d1 --remote'
+    )
+    expect(packageJson.scripts['d1:init']).toBeUndefined()
+    expect(packageJson.scripts['d1:migrate']).toBeUndefined()
     expect(readme).toMatch(/new install/i)
     expect(readme).toMatch(/compatibility install/i)
     expect(readme).toContain('deploy/init.sql')

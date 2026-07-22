@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 
 type Renderers = {
   renderMonitor: (monitor: { id: string; name: string; hideLatencyChart?: boolean }, monitorData: { up: boolean }, state: unknown) => string
@@ -7,7 +8,7 @@ type Renderers = {
 }
 
 async function loadRenderers(): Promise<Renderers> {
-  const app = await readFile(new URL('../static/js/app.js', import.meta.url), 'utf8')
+  const app = await readFile(fileURLToPath(String(new URL('../static/js/app.js', import.meta.url))), 'utf8')
   const window = { addEventListener() {}, location: { hash: '' }, UW: {} }
   const document = {
     addEventListener() {},
@@ -64,8 +65,8 @@ describe('accessible status UI', () => {
   })
 
   it('keeps keyboard focus indicators, focusable status bars, and reduced-motion support', async () => {
-    const css = await readFile(new URL('../static/css/style.css', import.meta.url), 'utf8')
-    const app = await readFile(new URL('../static/js/app.js', import.meta.url), 'utf8')
+    const css = await readFile(fileURLToPath(String(new URL('../static/css/style.css', import.meta.url))), 'utf8')
+    const app = await readFile(fileURLToPath(String(new URL('../static/js/app.js', import.meta.url))), 'utf8')
 
     expect(css).toMatch(/:focus-visible\s*\{[^}]*outline:/s)
     expect(css).toMatch(/\.tooltip:focus-within\s+\.tooltip-text/s)

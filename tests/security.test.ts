@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('cloudflare:workers', () => ({
@@ -40,7 +41,7 @@ afterEach(() => {
 
 describe('worker security boundary', () => {
   it('configures Static Assets to invoke the Worker first and use SPA fallbacks', async () => {
-    const config = await readFile(new URL('../wrangler.toml', import.meta.url), 'utf8')
+    const config = await readFile(fileURLToPath(String(new URL('../wrangler.toml', import.meta.url))), 'utf8')
 
     expect(config).toMatch(/run_worker_first\s*=\s*true/)
     expect(config).toMatch(/not_found_handling\s*=\s*"single-page-application"/)
@@ -236,7 +237,7 @@ describe('worker security boundary', () => {
   })
 
   it('does not rely on inline event handlers for upcoming maintenance', async () => {
-    const app = await readFile(new URL('../static/js/app.js', import.meta.url), 'utf8')
+    const app = await readFile(fileURLToPath(String(new URL('../static/js/app.js', import.meta.url))), 'utf8')
 
     expect(app).not.toMatch(/onclick\s*=/)
     expect(app).not.toMatch(/window\.UW/)

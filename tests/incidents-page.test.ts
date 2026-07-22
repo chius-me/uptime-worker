@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 
 type IncidentView = {
   id: string
@@ -21,7 +22,7 @@ type IncidentRenderers = {
 }
 
 async function loadIncidentRenderers(): Promise<IncidentRenderers> {
-  const app = await readFile(new URL('../static/js/app.js', import.meta.url), 'utf8')
+  const app = await readFile(fileURLToPath(String(new URL('../static/js/app.js', import.meta.url))), 'utf8')
   const window = { addEventListener() {}, location: { hash: '' }, UW: {} }
   const document = {
     addEventListener() {},

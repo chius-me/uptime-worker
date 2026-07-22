@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { readFile } from 'node:fs/promises'
+import { fileURLToPath } from 'node:url'
 
 type Monitor = { id: string; name: string; hideLatencyChart?: boolean }
 type StatusData = {
@@ -22,7 +23,7 @@ type Renderers = {
 }
 
 async function loadRenderers(): Promise<Renderers> {
-  const app = await readFile(new URL('../static/js/app.js', import.meta.url), 'utf8')
+  const app = await readFile(fileURLToPath(String(new URL('../static/js/app.js', import.meta.url))), 'utf8')
   const window = { addEventListener() {}, UW: {} }
   const document = {
     addEventListener() {},
@@ -47,14 +48,14 @@ describe('status page monitoring state', () => {
     const requiredKeys = ['Monitoring initializing', 'Monitoring delayed', 'Last successful check', 'Unknown']
 
     await Promise.all(localeFiles.map(async (locale) => {
-      const content = await readFile(new URL(`../static/locales/${locale}/common.json`, import.meta.url), 'utf8')
+      const content = await readFile(fileURLToPath(String(new URL(`../static/locales/${locale}/common.json`, import.meta.url))), 'utf8')
       const translations = JSON.parse(content) as Record<string, string>
       requiredKeys.forEach((key) => expect(translations[key]).toBeTypeOf('string'))
     }))
   })
 
   it('styles delayed monitoring without the healthy green treatment', async () => {
-    const css = await readFile(new URL('../static/css/style.css', import.meta.url), 'utf8')
+    const css = await readFile(fileURLToPath(String(new URL('../static/css/style.css', import.meta.url))), 'utf8')
 
     expect(css).toMatch(/\.overall-status\.status-stale\s+\.overall-icon\s*\{[^}]*background:\s*var\(--orange-bg\)/s)
     expect(css).not.toMatch(/\.overall-status\.status-stale\s+\.overall-icon\s*\{[^}]*var\(--green/s)
