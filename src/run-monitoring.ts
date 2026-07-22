@@ -141,7 +141,8 @@ function statusChanged(
 function retainRecentData(
   wrapper: CompactedMonitorStateWrapper,
   monitorId: string,
-  now: number
+  now: number,
+  pendingEventKeys: ReadonlySet<string>
 ): void {
   while (
     wrapper.latencyLen(monitorId) > 0 &&
@@ -156,8 +157,8 @@ function retainRecentData(
     columns.id.length > 0 &&
     columns.resolvedAt[0] !== null &&
     columns.resolvedAt[0]! < now - 90 * 24 * 60 * 60 &&
-    (columns.downEventKey[0] === null || columns.downNotifiedAt[0] !== null) &&
-    (columns.recoveryEventKey[0] === null || columns.recoveryNotifiedAt[0] !== null)
+    (columns.downEventKey[0] === null || !pendingEventKeys.has(columns.downEventKey[0]!)) &&
+    (columns.recoveryEventKey[0] === null || !pendingEventKeys.has(columns.recoveryEventKey[0]!))
   ) {
     for (const values of Object.values(columns)) values.shift()
   }
@@ -173,6 +174,16 @@ export async function runMonitoring(
 ): Promise<RunOutput> {
   const startedAtMs = (dependencies.nowMs ?? Date.now)()
   const wrapper = new CompactedMonitorStateWrapper(await getFromStore(env, 'state'))
+  const pendingResult = await env.UPTIME_WORKER_D1.prepare(
+    `SELECT event_key FROM notification_outbox
+     WHERE status = 'pending'
+     ORDER BY event_key ASC`
+  ).bind().all<{ event_key: string }>()
+  const pendingEventKeys = new Set(
+    (pendingResult.results ?? [])
+      .map(({ event_key }) => event_key)
+      .filter((eventKey) => typeof eventKey === 'string')
+  )
   const getWorkerLocation = dependencies.getWorkerLocation ?? resolveWorkerLocation
   const doMonitor = dependencies.doMonitor ?? checkMonitor
   let workerLocation = 'unknown'
@@ -226,6 +237,7 @@ export async function runMonitoring(
     })
     storeIncident(wrapper.data, monitor.id, previous, notification.incident)
     events.push(...notification.events)
+    for (const event of notification.events) pendingEventKeys.add(event.eventKey)
 
     const incident = notification.incident
     if (statusChanged(previous, incident, check.status) && incident) {
@@ -255,7 +267,7 @@ export async function runMonitoring(
       ping: check.status.ping,
       time: now,
     })
-    retainRecentData(wrapper, monitor.id, now)
+    retainRecentData(wrapper, monitor.id, now, pendingEventKeys)
   })
 
   wrapper.data.overallUp = overallUp

@@ -42,13 +42,22 @@ function emptyState(): MonitorStateCompactedV2 {
   }
 }
 
-function readEnv(state: MonitorStateCompactedV2 | null = null) {
+function readEnv(
+  state: MonitorStateCompactedV2 | null = null,
+  pendingEventKeys: readonly string[] = [],
+  pendingQueryError?: Error
+) {
   return {
     REMOTE_CHECKER_DO: {},
     UPTIME_WORKER_D1: {
-      prepare: vi.fn(() => ({
+      prepare: vi.fn((sql: string) => ({
         bind: vi.fn(() => ({
           first: vi.fn(async () => state === null ? null : { value: JSON.stringify(state) }),
+          all: vi.fn(async () => {
+            if (pendingQueryError) throw pendingQueryError
+            if (!sql.includes('notification_outbox')) return { results: [] }
+            return { results: pendingEventKeys.map((event_key) => ({ event_key })) }
+          }),
         })),
       })),
     },
@@ -215,7 +224,7 @@ describe('runMonitoring', () => {
     }
 
     const output = await runMonitoring(
-      readEnv(state),
+      readEnv(state, ['api:100:recovery']),
       { monitors: [monitor('api')], notification: { webhook } },
       now,
       'run-aged',
@@ -227,6 +236,51 @@ describe('runMonitoring', () => {
 
     expect(output.state.incident.api.id).toEqual(['api:100'])
     expect(output.state.incident.api.recoveryNotifiedAt).toEqual([null])
+  })
+
+  it('prunes an aged incident when its queued key is no longer actually pending', async () => {
+    const now = 100 + 91 * 24 * 60 * 60
+    const state = emptyState()
+    state.incident.api = {
+      id: ['api:100'],
+      startedAt: [100],
+      resolvedAt: [200],
+      changes: [[{
+        at: 100,
+        internalError: 'Connection: refused',
+        publicMessage: 'Connection failed',
+      }]],
+      downEventKey: ['api:100:down'],
+      recoveryEventKey: ['api:100:recovery'],
+      downNotifiedAt: [null],
+      recoveryNotifiedAt: [null],
+    }
+
+    const output = await runMonitoring(
+      readEnv(state, []),
+      { monitors: [monitor('api')], notification: { webhook } },
+      now,
+      'run-terminalized',
+      {
+        doMonitor: async () => ({ id: 'api', location: 'SFO', status: successfulProbe(1) }),
+        getWorkerLocation: async () => 'SFO',
+      }
+    )
+
+    expect(output.state.incident.api).toBeUndefined()
+  })
+
+  it('fails before probing when pending-key lookup fails', async () => {
+    const probe = vi.fn(async () => ({ id: 'api', location: 'SFO', status: successfulProbe(1) }))
+
+    await expect(runMonitoring(
+      readEnv(emptyState(), [], new Error('pending lookup unavailable')),
+      { monitors: [monitor('api')], notification: { webhook } },
+      100,
+      'run-lookup-failure',
+      { doMonitor: probe, getWorkerLocation: async () => 'SFO' }
+    )).rejects.toThrow('pending lookup unavailable')
+    expect(probe).not.toHaveBeenCalled()
   })
 
   it('defensively suppresses notifications for an empty webhook array', async () => {

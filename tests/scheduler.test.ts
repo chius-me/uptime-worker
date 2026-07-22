@@ -18,7 +18,7 @@ import {
   sendHeartbeat,
   type SchedulerDependencies,
 } from '../src/scheduler'
-import type { RunOutput } from '../src/run-monitoring'
+import { runMonitoring, type RunOutput } from '../src/run-monitoring'
 import { webhookNotify } from '../src/util'
 
 const config: WorkerConfig = {
@@ -152,25 +152,31 @@ describe('Scheduler', () => {
     expect(order).toEqual(['run', 'persist', 'dispatch', 'cleanup', 'heartbeat', 'callbacks'])
   })
 
-  it('clears the overlap lock after a never-settling callback reaches its five-second bound', async () => {
+  it('clears the overlap lock after one five-second window for concurrent monitor callbacks', async () => {
     vi.useFakeTimers()
     try {
-      const onStatusChange = vi.fn()
-        .mockImplementationOnce(() => new Promise(() => undefined))
-        .mockResolvedValue(undefined)
+      let callbackCalls = 0
+      const onStatusChange = vi.fn(() => {
+        callbackCalls += 1
+        return callbackCalls <= 2 ? new Promise(() => undefined) : Promise.resolve()
+      })
       const callbackConfig: WorkerConfig = {
         ...config,
+        monitors: [
+          ...config.monitors,
+          { id: 'web', name: 'Web', method: 'GET', target: 'https://web.example' },
+        ],
         callbacks: { onStatusChange },
       }
       const output = runOutput()
-      output.callbacks = [{
-        type: 'status-change',
-        monitorId: 'api',
+      output.callbacks = ['api', 'web'].map((monitorId) => ({
+        type: 'status-change' as const,
+        monitorId,
         isUp: false,
         startedAt: 100,
         checkedAt: 110,
-        publicMessage: 'Connection failed',
-      }]
+        publicMessage: 'Connection failed' as const,
+      }))
       const dispatch = vi.fn(async () => ({ attempted: 0, delivered: 0, failed: 0 }))
       const { scheduler } = schedulerWith({
         resolveConfig: () => callbackConfig,
@@ -182,7 +188,7 @@ describe('Scheduler', () => {
       const first = scheduler.run(1_000)
       let firstSettled = false
       void first.then(() => { firstSettled = true })
-      await vi.waitFor(() => expect(onStatusChange).toHaveBeenCalledOnce())
+      await vi.waitFor(() => expect(onStatusChange).toHaveBeenCalledTimes(2))
       expect(dispatch).toHaveBeenCalledOnce()
       await expect(scheduler.run(1_001)).resolves.toEqual({
         status: 'skipped-overlap',
@@ -193,7 +199,7 @@ describe('Scheduler', () => {
       await Promise.resolve()
       expect(firstSettled).toBe(true)
       await expect(scheduler.run(2_000)).resolves.toMatchObject({ status: 'completed' })
-      expect(onStatusChange).toHaveBeenCalledTimes(2)
+      expect(onStatusChange).toHaveBeenCalledTimes(4)
     } finally {
       vi.useRealTimers()
     }
@@ -226,24 +232,74 @@ type StoredOutbox = {
   last_error_code: string | null
 }
 
-function outboxEvent(kind: NotificationEvent['kind']): StoredOutbox {
+function outboxFor(
+  startedAt: number,
+  kind: NotificationEvent['kind'],
+  nextAttemptAt = 1_000
+): StoredOutbox {
   return {
-    event_key: `api:100:${kind}`,
+    event_key: `api:${startedAt}:${kind}`,
     payload: JSON.stringify({
-      eventKey: `api:100:${kind}`,
-      incidentId: 'api:100',
+      eventKey: `api:${startedAt}:${kind}`,
+      incidentId: `api:${startedAt}`,
       monitorId: 'api',
       kind,
-      startedAt: 100,
-      checkedAt: kind === 'down' ? 100 : 130,
+      startedAt,
+      checkedAt: kind === 'down' ? startedAt : startedAt + 30,
       publicMessage: kind === 'down' ? 'Connection failed' : 'OK',
     }),
     status: 'pending',
     attempts: 0,
-    next_attempt_at: 1_000,
+    next_attempt_at: nextAttemptAt,
     delivered_at: null,
     last_error_code: null,
   }
+}
+
+function outboxEvent(kind: NotificationEvent['kind']): StoredOutbox {
+  return outboxFor(100, kind)
+}
+
+function stateForOutbox(rows: readonly StoredOutbox[]): MonitorStateCompactedV2 {
+  const state = stateWithIncident()
+  state.incident.api = {
+    id: [],
+    startedAt: [],
+    resolvedAt: [],
+    changes: [],
+    downEventKey: [],
+    recoveryEventKey: [],
+    downNotifiedAt: [],
+    recoveryNotifiedAt: [],
+  }
+  const incidents = new Map<number, { down: boolean; recovery: boolean }>()
+  for (const row of rows) {
+    try {
+      const payload = JSON.parse(row.payload)
+      if (payload.monitorId !== 'api' || !Number.isSafeInteger(payload.startedAt)) continue
+      const current = incidents.get(payload.startedAt) ?? { down: false, recovery: false }
+      if (payload.kind === 'down') current.down = true
+      if (payload.kind === 'recovery') current.recovery = true
+      incidents.set(payload.startedAt, current)
+    } catch {
+      // Poison rows intentionally have no trustworthy state identity.
+    }
+  }
+  for (const [startedAt, queued] of [...incidents].sort(([left], [right]) => left - right)) {
+    state.incident.api.id.push(`api:${startedAt}`)
+    state.incident.api.startedAt.push(startedAt)
+    state.incident.api.resolvedAt.push(queued.recovery ? startedAt + 30 : null)
+    state.incident.api.changes.push([{
+      at: startedAt,
+      internalError: 'Connection: refused',
+      publicMessage: 'Connection failed',
+    }])
+    state.incident.api.downEventKey.push(queued.down || queued.recovery ? `api:${startedAt}:down` : null)
+    state.incident.api.recoveryEventKey.push(queued.recovery ? `api:${startedAt}:recovery` : null)
+    state.incident.api.downNotifiedAt.push(null)
+    state.incident.api.recoveryNotifiedAt.push(null)
+  }
+  return state
 }
 
 function dispatchEnv(
@@ -263,21 +319,38 @@ function dispatchEnv(
           sql,
           args,
           async all() {
+            if (sql.includes("WHERE status = 'pending'") && !sql.includes('AS candidate')) {
+              return {
+                results: rows
+                  .filter((row) => row.status === 'pending')
+                  .map(({ event_key }) => ({ event_key })),
+              }
+            }
             return {
               results: rows.filter((row) => {
                 return row.status === 'pending' && row.next_attempt_at <= Number(args[0])
-              }).sort((left, right) => left.next_attempt_at - right.next_attempt_at || left.event_key.localeCompare(right.event_key)),
+              }).sort((left, right) => left.next_attempt_at - right.next_attempt_at || left.event_key.localeCompare(right.event_key))
+                .slice(0, Number(args[1])),
             }
           },
           async first() {
             if (sql.includes('FROM uptimeflare')) return { value: JSON.stringify(state) }
             if (sql.includes('SELECT status') && sql.includes('notification_outbox')) {
               const row = rows.find((candidate) => candidate.event_key === args[0])
-              return row ? { status: row.status, last_error_code: row.last_error_code } : null
+              return row ? {
+                status: row.status,
+                last_error_code: row.last_error_code,
+                next_attempt_at: row.next_attempt_at,
+              } : null
             }
             return null
           },
           async run() {
+            if (sql.includes('SET next_attempt_at = ?') && !sql.includes('attempts = attempts + 1')) {
+              const event = rows.find((row) => row.event_key === args[1])!
+              event.next_attempt_at = Number(args[0])
+              return { success: true }
+            }
             const event = rows.find((row) => row.event_key === args[2])!
             if (sql.includes("SET status = 'delivered'")) {
               terminalUpdates.push(args)
@@ -300,9 +373,13 @@ function dispatchEnv(
       if (options.failConfirmation) throw new Error('confirmation unavailable')
       const outboxStatement = statements.find(({ sql }) => sql.includes('UPDATE notification_outbox'))!
       const stateStatement = statements.find(({ sql }) => sql.includes('INSERT INTO uptimeflare'))!
-      const row = rows.find((candidate) => candidate.event_key === outboxStatement.args[1])!
+      const terminal = outboxStatement.args.length === 3
+      const row = rows.find((candidate) => (
+        candidate.event_key === outboxStatement.args[terminal ? 2 : 1]
+      ))!
       row.status = 'delivered'
       row.delivered_at = Number(outboxStatement.args[0])
+      row.last_error_code = terminal ? String(outboxStatement.args[1]) : null
       state = JSON.parse(String(stateStatement.args[1]))
       return []
     },
@@ -329,7 +406,7 @@ describe('notification outbox dispatcher', () => {
     ) => undefined)
     const dependencies = { now: () => 1_000, resolveConfig: () => config, webhookNotify: notify }
 
-    await dispatchPendingNotifications(fake.env, 20, dependencies)
+    await dispatchPendingNotifications(fake.env, 1, dependencies)
     expect(notify).toHaveBeenCalledTimes(1)
     expect(notify.mock.calls[0][2]).toContain('Current API name')
     expect(notify.mock.calls[0][3]).toBe('api:100:down')
@@ -340,6 +417,87 @@ describe('notification outbox dispatcher', () => {
     const selection = fake.queries.find((query) => query.includes('FROM notification_outbox AS candidate'))!
     expect(selection).toMatch(/ORDER BY/i)
     expect(selection).not.toContain('json_extract')
+  })
+
+  it('scans past more than twenty deferred recoveries to deliver a later due down', async () => {
+    const rows: StoredOutbox[] = []
+    for (let startedAt = 100; startedAt < 125; startedAt += 1) {
+      rows.push(outboxFor(startedAt, 'recovery', 1_000))
+      rows.push(outboxFor(startedAt, 'down', 5_000))
+    }
+    const deliverable = outboxFor(999, 'down', 1_001)
+    rows.push(deliverable)
+    const fake = dispatchEnv(rows, { state: stateForOutbox(rows) })
+    const notify = vi.fn(async (
+      _env: unknown,
+      _webhook: unknown,
+      _message: string,
+      _idempotencyKey?: string
+    ) => undefined)
+
+    await dispatchPendingNotifications(fake.env, 1, {
+      now: () => 2_000,
+      resolveConfig: () => config,
+      webhookNotify: notify,
+    })
+
+    expect(notify).toHaveBeenCalledOnce()
+    expect(notify.mock.calls[0][3]).toBe('api:999:down')
+    for (const recovery of rows.filter(({ event_key }) => event_key.endsWith(':recovery'))) {
+      expect(recovery).toMatchObject({ status: 'pending', attempts: 0, next_attempt_at: 5_000 })
+    }
+  })
+
+  it('defers recovery to the natural backoff of its failed down dependency', async () => {
+    const down = outboxEvent('down')
+    const recovery = outboxEvent('recovery')
+    const rows = [down, recovery]
+    const fake = dispatchEnv(rows)
+    const notify = vi.fn(async (
+      _env: unknown,
+      _webhook: unknown,
+      _message: string,
+      eventKey?: string
+    ) => {
+      if (eventKey?.endsWith(':down')) throw new Error('provider unavailable')
+    })
+
+    await dispatchPendingNotifications(fake.env, 20, {
+      now: () => 1_000,
+      resolveConfig: () => config,
+      webhookNotify: notify,
+    })
+
+    expect(down).toMatchObject({ attempts: 1, next_attempt_at: 1_030 })
+    expect(recovery).toMatchObject({ attempts: 0, next_attempt_at: 1_030, status: 'pending' })
+    expect(notify).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['missing', undefined],
+    ['terminalized', 'invalid_payload'],
+  ])('terminalizes recovery with a %s down dependency and reconciles state', async (_name, errorCode) => {
+    const recovery = outboxEvent('recovery')
+    const rows = [recovery]
+    if (errorCode) {
+      const down = outboxEvent('down')
+      down.status = 'delivered'
+      down.delivered_at = 900
+      down.last_error_code = errorCode
+      rows.push(down)
+    }
+    const fake = dispatchEnv(rows, { state: stateForOutbox(rows) })
+    const notify = vi.fn(async () => undefined)
+
+    await dispatchPendingNotifications(fake.env, 20, {
+      now: () => 1_000,
+      resolveConfig: () => config,
+      webhookNotify: notify,
+    })
+
+    expect(recovery).toMatchObject({ status: 'delivered', last_error_code: 'blocked_dependency' })
+    expect(fake.getState().incident.api.recoveryEventKey).toEqual([null])
+    expect(notify).not.toHaveBeenCalled()
   })
 
   it('terminalizes malformed JSON without blocking a later valid event', async () => {
@@ -373,7 +531,7 @@ describe('notification outbox dispatcher', () => {
     expect(notify.mock.calls[0][3]).toBe('api:100:down')
   })
 
-  it('does not treat a terminalized invalid down row as recovery delivery', async () => {
+  it('terminalizes recovery after its down row is terminalized invalid', async () => {
     const invalidDown = outboxEvent('down')
     invalidDown.payload = '{not-json'
     const recovery = outboxEvent('recovery')
@@ -388,7 +546,7 @@ describe('notification outbox dispatcher', () => {
     })
 
     expect(invalidDown).toMatchObject({ status: 'delivered', last_error_code: 'invalid_payload' })
-    expect(recovery.status).toBe('pending')
+    expect(recovery).toMatchObject({ status: 'delivered', last_error_code: 'blocked_dependency' })
     expect(notify).not.toHaveBeenCalled()
   })
 
@@ -413,6 +571,36 @@ describe('notification outbox dispatcher', () => {
 
     expect(row).toMatchObject({ status: 'delivered', last_error_code: 'invalid_payload' })
     expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('reconciles a safely-identifiable invalid recovery and permits next-run pruning', async () => {
+    const now = 100 + 91 * 24 * 60 * 60
+    const row = outboxEvent('recovery')
+    row.payload = JSON.stringify({
+      ...JSON.parse(row.payload),
+      publicMessage: 'Connection failed',
+    })
+    const oldState = stateForOutbox([row])
+    oldState.incident.api.resolvedAt[0] = 130
+    const fake = dispatchEnv([row], { state: oldState })
+
+    await dispatchPendingNotifications(fake.env, 20, {
+      now: () => now,
+      resolveConfig: () => config,
+      webhookNotify: vi.fn(async () => undefined),
+    })
+    expect(row).toMatchObject({ status: 'delivered', last_error_code: 'invalid_payload' })
+
+    const output = await runMonitoring(fake.env, config, now, 'run-after-poison', {
+      doMonitor: async () => ({ id: 'api', location: 'SFO', status: {
+        up: true,
+        ping: 1,
+        internalError: '',
+        publicMessage: 'OK',
+      } }),
+      getWorkerLocation: async () => 'SFO',
+    })
+    expect(output.state.incident.api).toBeUndefined()
   })
 
   it('terminalizes an orphaned event before webhook delivery', async () => {
@@ -676,5 +864,13 @@ describe('deployment schema', () => {
     expect(initial).toMatch(/CREATE TABLE IF NOT EXISTS uptimeflare/i)
     expect(outbox).toMatch(/CREATE TABLE IF NOT EXISTS notification_outbox/i)
     expect(outbox).toMatch(/CREATE TABLE IF NOT EXISTS monitor_runs/i)
+    expect(outbox).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_due[\s\S]*status\s*,\s*next_attempt_at\s*,\s*event_key/i)
+    expect(outbox).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_delivered[\s\S]*status\s*,\s*delivered_at\s*,\s*event_key/i)
+    expect(outbox).toMatch(/CREATE INDEX IF NOT EXISTS monitor_runs_completed[\s\S]*completed_at\s*,\s*run_id/i)
+
+    const compatibility = await readFile(new URL('../deploy/init.sql', import.meta.url), 'utf8')
+    expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_due/i)
+    expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_delivered/i)
+    expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS monitor_runs_completed/i)
   })
 })
