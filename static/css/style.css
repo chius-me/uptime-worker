@@ -78,6 +78,21 @@
   padding: 0;
 }
 
+.upcoming-maintenance-toggle {
+  text-align: center;
+  margin-top: 8px;
+}
+
+.upcoming-maintenance-toggle button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+
 body {
   font-family: var(--font);
   background: var(--bg);

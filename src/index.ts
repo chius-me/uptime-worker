@@ -8,6 +8,7 @@ import { logEvent } from './log'
 import { CompactedMonitorStateWrapper, getFromStore, setToStore } from './store'
 import { isBasicAuthValid } from './auth'
 import { buildDataPayload, handleBadgeAPI, handleHealthAPI } from './api'
+import { withSecurityHeaders } from './security'
 import pLimit from 'p-limit'
 
 export interface Env {
@@ -29,30 +30,30 @@ export default {
 
     // CORS 预检
     if (request.method === 'OPTIONS') {
-      return new Response(null, {
+      return withSecurityHeaders(new Response(null, {
         headers: {
           'Access-Control-Allow-Origin': '*',
           'Access-Control-Allow-Methods': 'GET, OPTIONS',
           'Access-Control-Allow-Headers': 'Content-Type',
         },
-      })
+      }))
     }
 
     if (!isBasicAuthValid(request.headers.get('Authorization'), workerConfig.passwordProtection)) {
-      return new Response(JSON.stringify({ code: 401, message: 'Not authenticated' }), {
+      return withSecurityHeaders(new Response(JSON.stringify({ code: 401, message: 'Not authenticated' }), {
         status: 401,
         headers: { 'WWW-Authenticate': 'Basic', 'Content-Type': 'application/json' },
-      })
+      }))
     }
 
     if (url.pathname === '/api/data') {
-      return handleDataAPI(env, ctx)
+      return withSecurityHeaders(await handleDataAPI(env, ctx))
     }
     if (url.pathname === '/api/badge') {
-      return handleBadgeAPI(request, env)
+      return withSecurityHeaders(await handleBadgeAPI(request, env))
     }
     if (url.pathname === '/api/health') {
-      return handleHealthAPI(env)
+      return withSecurityHeaders(await handleHealthAPI(env))
     }
 
     // 非 API 路径 → Workers Static Assets（SPA）
@@ -60,9 +61,9 @@ export default {
     const asset = await env.ASSETS.fetch(request)
     if (asset.status === 404) {
       // SPA 回退：让前端 hash routing 处理
-      return env.ASSETS.fetch(new Request(new URL('/index.html', request.url), request))
+      return withSecurityHeaders(await env.ASSETS.fetch(new Request(new URL('/index.html', request.url), request)))
     }
-    return asset
+    return withSecurityHeaders(asset)
   },
 
   // ── 定时任务（每分钟跑一次监控）──

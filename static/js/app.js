@@ -94,6 +94,7 @@ async function render() {
 // ── Status Page ──────────────────────────────────
 function renderStatusPage(container) {
   container.innerHTML = renderStatusPageHtml(apiData)
+  setupUpcomingMaintenanceToggle()
 
   const { state, monitorsConfig } = apiData
 
@@ -163,8 +164,8 @@ function renderStatusPageHtml(data) {
 
   activeM.forEach(m => { html += renderMaintenance(m, false, config) })
   if (upcomingM.length > 0) {
-    html += `<div class="status-subtitle" style="text-align:center;margin-top:8px;cursor:pointer" onclick="UW.toggleUpcoming()">
-      ${I18N.t('upcoming maintenance', { count: upcomingM.length })} <span id="upcoming-toggle" style="text-decoration:underline">${I18N.t('Show')}</span>
+    html += `<div class="status-subtitle upcoming-maintenance-toggle">
+      ${I18N.t('upcoming maintenance', { count: upcomingM.length })} <button type="button" id="upcoming-toggle">${I18N.t('Show')}</button>
     </div>
     <div id="upcoming-list" style="display:none">
       ${upcomingM.map(m => renderMaintenance(m, true, config)).join('')}
@@ -198,6 +199,18 @@ function renderStatusPageHtml(data) {
   }
 
   return html
+}
+
+function setupUpcomingMaintenanceToggle() {
+  const list = document.getElementById('upcoming-list')
+  const toggle = document.getElementById('upcoming-toggle')
+  if (!list || !toggle) return
+
+  toggle.addEventListener('click', () => {
+    const show = list.style.display === 'none'
+    list.style.display = show ? 'block' : 'none'
+    toggle.textContent = show ? I18N.t('Hide') : I18N.t('Show')
+  })
 }
 
 function renderMaintenance(m, upcoming, config) {
@@ -568,18 +581,6 @@ function setupThemeToggle() {
     // Redraw charts to update grid/axis colors to match the theme immediately
     if (apiData) render()
   })
-}
-
-// ── Expose for inline event handlers ─────────────
-window.UW = {
-  toggleUpcoming() {
-    const list = document.getElementById('upcoming-list')
-    const toggle = document.getElementById('upcoming-toggle')
-    if (!list || !toggle) return
-    const show = list.style.display === 'none'
-    list.style.display = show ? 'block' : 'none'
-    toggle.textContent = show ? I18N.t('Hide') : I18N.t('Show')
-  }
 }
 
 // ── Auto-refresh ─────────────────────────────────
