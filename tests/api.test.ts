@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildDataPayload, handleBadgeAPI, handleHealthAPI, publicMessage, toPublicIncident } from '../src/api'
+import * as probe from '../src/probe'
 import type { MonitorState } from '../types/config'
 
 const monitor = (id: string) => ({ id, name: id, method: 'GET', target: `https://${id}.example` })
@@ -218,6 +219,33 @@ describe('public status API contracts', () => {
     expect(publicMessage('TLS certificate invalid')).toBe('TLS validation failed')
     expect(publicMessage('keyword was not found')).toBe('Content check failed')
     expect(publicMessage('getaddrinfo ENOTFOUND internal.lan')).toBe('Connection failed')
+  })
+
+  it('uses the shared deterministic internal-error classifier', () => {
+    const classifier = (probe as unknown as {
+      publicMessageForInternalError?: (error: string) => string
+    }).publicMessageForInternalError
+
+    expect(classifier).toBeTypeOf('function')
+    expect(classifier!('deadline exceeded')).toBe('Connection failed')
+    expect(classifier!('Timeout: deadline exceeded')).toBe('Timeout')
+  })
+
+  it('reconstructs the same public categories from persisted canonical diagnostics', () => {
+    const statuses = [
+      probe.failedProbe('Timeout: deadline exceeded'),
+      probe.failedProbe('Unexpected status: expected 200, got 500'),
+      probe.failedProbe('TLS validation: certificate not trusted'),
+      probe.failedProbe('Content check: required keyword missing'),
+      probe.failedProbe('Connection: getaddrinfo ENOTFOUND internal.lan'),
+    ]
+    const incident = toPublicIncident('api', {
+      start: [100, 110, 120, 130, 140],
+      end: null,
+      error: statuses.map(({ internalError }) => internalError),
+    })
+
+    expect(incident.error).toEqual(statuses.map(({ publicMessage }) => publicMessage))
   })
 
   it('adapts legacy incidents without exposing their raw errors', () => {

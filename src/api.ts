@@ -10,6 +10,7 @@ import type {
   PublicMessage,
 } from '../types/config'
 import type { Env } from './index'
+import { publicMessageForInternalError } from './probe'
 import { CompactedMonitorStateWrapper, getFromStore } from './store'
 
 const STALE_AFTER_SECONDS = 180
@@ -49,12 +50,7 @@ export type BadgePayload = {
 }
 
 export function publicMessage(error: string): PublicMessage {
-  if (/content check inconclusive/i.test(error)) return 'Content check inconclusive'
-  if (/timeout|abort/i.test(error)) return 'Timeout'
-  if (/status|expected code/i.test(error)) return 'Unexpected status code'
-  if (/tls|certificate/i.test(error)) return 'TLS validation failed'
-  if (/keyword/i.test(error)) return 'Content check failed'
-  return 'Connection failed'
+  return publicMessageForInternalError(error)
 }
 
 function asPublicMessage(value: string | undefined): PublicMessage {

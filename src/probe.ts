@@ -20,7 +20,14 @@ const PUBLIC_MESSAGES = new Set<PublicMessage>([
 
 const MAX_LOCATION_LENGTH = 256
 const MAX_INTERNAL_ERROR_LENGTH = 512
-const MAX_PROXY_PING = 300_000
+export const MAX_PROBE_PING = 65_535
+
+export class ProbeTimeoutError extends Error {
+  constructor(milliseconds: number) {
+    super(`Probe deadline exceeded after ${milliseconds}ms`)
+    this.name = 'AbortError'
+  }
+}
 
 export class ResponseTooLargeError extends Error {
   constructor(readonly partialText: string) {
@@ -29,7 +36,11 @@ export class ResponseTooLargeError extends Error {
   }
 }
 
-export async function readTextLimited(response: Response, maxBytes = 65_536): Promise<string> {
+export async function readTextLimited(
+  response: Response,
+  maxBytes = 65_536,
+  signal?: AbortSignal
+): Promise<string> {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
     throw new TypeError('maxBytes must be a non-negative safe integer')
   }
@@ -40,6 +51,11 @@ export async function readTextLimited(response: Response, maxBytes = 65_536): Pr
   let bytesRead = 0
   let text = ''
   let completed = false
+  const cancelOnAbort = () => {
+    void reader.cancel(signal?.reason).catch(() => undefined)
+  }
+  if (signal?.aborted) cancelOnAbort()
+  else signal?.addEventListener('abort', cancelOnAbort, { once: true })
   try {
     while (true) {
       const { done, value } = await reader.read()
@@ -56,8 +72,51 @@ export async function readTextLimited(response: Response, maxBytes = 65_536): Pr
       text += decoder.decode(value, { stream: true })
     }
   } finally {
+    signal?.removeEventListener('abort', cancelOnAbort)
     if (!completed) await reader.cancel().catch(() => undefined)
     reader.releaseLock()
+  }
+}
+
+export async function fetchAndConsumeWithTimeout<T>(
+  url: string,
+  milliseconds: number,
+  consume: (response: Response, signal: AbortSignal) => Promise<T>,
+  { signal: parentSignal, ...options }: RequestInit<RequestInitCfProperties> = {}
+): Promise<T> {
+  const controller = new AbortController()
+  let response: Response | undefined
+  let timeoutError: ProbeTimeoutError | undefined
+  const abortFromParent = () => controller.abort(parentSignal?.reason)
+  if (parentSignal?.aborted) abortFromParent()
+  else parentSignal?.addEventListener('abort', abortFromParent, { once: true })
+  let timer: ReturnType<typeof setTimeout>
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      timeoutError = new ProbeTimeoutError(milliseconds)
+      controller.abort(timeoutError)
+      reject(timeoutError)
+    }, milliseconds)
+  })
+
+  try {
+    response = await Promise.race([
+      fetch(url, { ...options, signal: controller.signal }),
+      deadline,
+    ])
+    try {
+      const value = await Promise.race([consume(response, controller.signal), deadline])
+      if (controller.signal.aborted) throw timeoutError ?? controller.signal.reason
+      return value
+    } catch (error) {
+      if (timeoutError) throw timeoutError
+      throw error
+    }
+  } finally {
+    clearTimeout(timer!)
+    parentSignal?.removeEventListener('abort', abortFromParent)
+    if (!controller.signal.aborted) controller.abort()
+    await Promise.resolve(response?.body?.cancel()).catch(() => undefined)
   }
 }
 
@@ -85,10 +144,7 @@ export function parseProxyResult(value: unknown): { location: string; status: Pr
   if (
     !isRecord(status) ||
     !hasOnlyKeys(status, ['ping', 'up', 'internalError', 'publicMessage']) ||
-    typeof status.ping !== 'number' ||
-    !Number.isFinite(status.ping) ||
-    status.ping < 0 ||
-    status.ping > MAX_PROXY_PING ||
+    !isProbePing(status.ping) ||
     typeof status.up !== 'boolean' ||
     typeof status.internalError !== 'string' ||
     status.internalError.length > MAX_INTERNAL_ERROR_LENGTH ||
@@ -98,6 +154,7 @@ export function parseProxyResult(value: unknown): { location: string; status: Pr
     throw new TypeError('Invalid proxy status')
   }
   if (
+    status.publicMessage !== publicMessageForInternalError(status.internalError) ||
     (status.up && (status.publicMessage !== 'OK' || status.internalError !== '')) ||
     (!status.up && (
       status.publicMessage === 'OK' ||
@@ -124,14 +181,45 @@ export function boundedError(error: unknown, fallback: string): string {
   return (value || fallback).slice(0, MAX_INTERNAL_ERROR_LENGTH)
 }
 
-export function failedProbe(
-  publicMessage: Exclude<PublicMessage, 'OK' | 'Not checked yet'>,
-  internalError: string,
-  ping = 0
-): ProbeStatus {
-  return { ping, up: false, internalError: internalError.slice(0, MAX_INTERNAL_ERROR_LENGTH), publicMessage }
+export function publicMessageForInternalError(internalError: string): PublicMessage {
+  if (internalError === '') return 'OK'
+  if (internalError.startsWith('Timeout:')) return 'Timeout'
+  if (internalError.startsWith('Unexpected status:')) return 'Unexpected status code'
+  if (internalError.startsWith('TLS validation:')) return 'TLS validation failed'
+  if (internalError.startsWith('Content check inconclusive:')) return 'Content check inconclusive'
+  if (internalError.startsWith('Content check:')) return 'Content check failed'
+  if (/timeout|abort/i.test(internalError)) return 'Timeout'
+  if (/status|expected code/i.test(internalError)) return 'Unexpected status code'
+  if (/tls|certificate/i.test(internalError)) return 'TLS validation failed'
+  if (/inconclusive/i.test(internalError)) return 'Content check inconclusive'
+  if (/keyword|content check/i.test(internalError)) return 'Content check failed'
+  return 'Connection failed'
+}
+
+export function isProbePing(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) <= MAX_PROBE_PING
+}
+
+function requireProbePing(value: number): number {
+  if (!isProbePing(value)) throw new TypeError('Probe ping is outside Uint16 storage bounds')
+  return value
+}
+
+export function failedProbe(internalError: string, ping = 0): ProbeStatus {
+  const bounded = internalError.slice(0, MAX_INTERNAL_ERROR_LENGTH)
+  const publicMessage = publicMessageForInternalError(bounded)
+  if (publicMessage === 'OK' || publicMessage === 'Not checked yet') {
+    throw new TypeError('A failed probe requires an internal diagnostic')
+  }
+  return { ping: requireProbePing(ping), up: false, internalError: bounded, publicMessage }
 }
 
 export function successfulProbe(ping: number): ProbeStatus {
-  return { ping, up: true, internalError: '', publicMessage: 'OK' }
+  const internalError = ''
+  return {
+    ping: requireProbePing(ping),
+    up: true,
+    internalError,
+    publicMessage: publicMessageForInternalError(internalError),
+  }
 }

@@ -1,11 +1,13 @@
 import type { Env } from './index'
-import type { MonitorTarget, PublicMessage } from '../types/config'
-import { fetchTimeout, withTimeout } from './util'
+import type { MonitorTarget } from '../types/config'
+import { withTimeout } from './util'
 import { logEvent } from './log'
 import {
   ResponseTooLargeError,
   boundedError,
   failedProbe,
+  fetchAndConsumeWithTimeout,
+  isProbePing,
   parseProxyResult,
   readTextLimited,
   successfulProbe,
@@ -37,10 +39,7 @@ type ProbeDependencies = {
   connect?: (address: { hostname: string; port: number }) => SocketLike
 }
 
-type CheckFailure = {
-  internalError: string
-  publicMessage: Exclude<PublicMessage, 'OK' | 'Not checked yet'>
-}
+type CheckFailure = { internalError: string }
 
 const DEFAULT_TIMEOUT = 10_000
 
@@ -64,8 +63,12 @@ function isTimeout(error: unknown): boolean {
     String(error).toLowerCase().includes('timeout')
 }
 
-function contentFailure(message: string, publicMessage: CheckFailure['publicMessage']): CheckFailure {
-  return { internalError: message, publicMessage }
+function connectionDiagnostic(error: unknown, fallback: string): string {
+  return `Connection: ${boundedError(error, fallback)}`
+}
+
+function timeoutDiagnostic(error: unknown, fallback: string): string {
+  return `Timeout: ${boundedError(error, fallback)}`
 }
 
 async function httpResponseBasicCheck(
@@ -74,12 +77,11 @@ async function httpResponseBasicCheck(
   bodyReader: () => Promise<string>
 ): Promise<CheckFailure | null> {
   if (monitor.expectedCodes ? !monitor.expectedCodes.includes(code) : code < 200 || code > 299) {
-    return contentFailure(
-      monitor.expectedCodes
-        ? `Expected codes: ${JSON.stringify(monitor.expectedCodes)}, Got: ${code}`
-        : `Expected codes: 2xx, Got: ${code}`,
-      'Unexpected status code'
-    )
+    return {
+      internalError: 'Unexpected status: ' + (monitor.expectedCodes
+        ? `expected ${JSON.stringify(monitor.expectedCodes)}, got ${code}`
+        : `expected 2xx, got ${code}`),
+    }
   }
 
   if (!monitor.responseKeyword && !monitor.responseForbiddenKeyword) return null
@@ -91,22 +93,22 @@ async function httpResponseBasicCheck(
     if (error instanceof ResponseTooLargeError) {
       const requiredFound = !monitor.responseKeyword || error.partialText.includes(monitor.responseKeyword)
       if (requiredFound && !monitor.responseForbiddenKeyword) return null
-      return contentFailure('Content check inconclusive', 'Content check inconclusive')
+      return { internalError: 'Content check inconclusive: response exceeded 65536 bytes' }
     }
     throw error
   }
 
   if (monitor.responseKeyword && !responseBody.includes(monitor.responseKeyword)) {
-    return contentFailure("HTTP response doesn't contain the configured keyword", 'Content check failed')
+    return { internalError: 'Content check: required keyword missing' }
   }
   if (monitor.responseForbiddenKeyword && responseBody.includes(monitor.responseForbiddenKeyword)) {
-    return contentFailure('HTTP response contains the configured forbidden keyword', 'Content check failed')
+    return { internalError: 'Content check: forbidden keyword present' }
   }
   return null
 }
 
-async function readJsonLimited(response: Response): Promise<unknown> {
-  const text = await readTextLimited(response)
+async function readJsonLimited(response: Response, signal: AbortSignal): Promise<unknown> {
+  const text = await readTextLimited(response, 65_536, signal)
   try {
     return JSON.parse(text)
   } catch {
@@ -132,11 +134,18 @@ function asGlobalPingResult(value: unknown): GlobalPingResult {
   return value as GlobalPingResult
 }
 
-function finiteNonNegative(value: unknown, field: string): number {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+function probePing(value: unknown, field: string): number {
+  if (!isProbePing(value)) {
     throw new Error(`Invalid Globalping ${field}`)
   }
-  return value
+  return value as number
+}
+
+function globalPingStatusCode(value: unknown): number {
+  if (!Number.isSafeInteger(value) || (value as number) < 100 || (value as number) > 599) {
+    throw new Error('Invalid Globalping status code')
+  }
+  return value as number
 }
 
 function globalPingLocation(result: GlobalPingResult['results'][number]): string {
@@ -203,13 +212,19 @@ export async function getStatusWithGlobalPing(
     }
 
     const deadline = probeStart + timeout
-    const createResponse = await fetchTimeout('https://api.globalping.io/v1/measurements', Math.max(1, Math.min(5000, deadline - Date.now())), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify(globalPingRequest),
-    })
-    const measurement = asGlobalPingMeasurement(await readJsonLimited(createResponse))
-    if (createResponse.status !== 202) throw new Error('Globalping measurement rejected')
+    const measurement = await fetchAndConsumeWithTimeout(
+      'https://api.globalping.io/v1/measurements',
+      Math.max(1, Math.min(5000, deadline - Date.now())),
+      async (response, signal) => {
+        if (response.status !== 202) throw new Error('Globalping measurement rejected')
+        return asGlobalPingMeasurement(await readJsonLimited(response, signal))
+      },
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(globalPingRequest),
+      }
+    )
     measurementId = measurement.id.slice(0, 128)
     logEvent('globalping_measurement', {
       measurementId,
@@ -221,15 +236,14 @@ export async function getStatusWithGlobalPing(
     while (true) {
       const remaining = deadline - Date.now()
       if (remaining <= 0) throw new Error('Globalping polling timeout')
-      const pollResponse = await fetchTimeout(
+      measurementResult = await fetchAndConsumeWithTimeout(
         `https://api.globalping.io/v1/measurements/${encodeURIComponent(measurementId)}`,
-        Math.max(1, Math.min(5000, remaining))
+        Math.max(1, Math.min(5000, remaining)),
+        async (response, signal) => {
+          if (!response.ok) throw new Error('Globalping polling failed')
+          return asGlobalPingResult(await readJsonLimited(response, signal))
+        }
       )
-      if (!pollResponse.ok) {
-        await Promise.resolve(pollResponse.body?.cancel()).catch(() => undefined)
-        throw new Error('Globalping polling failed')
-      }
-      measurementResult = asGlobalPingResult(await readJsonLimited(pollResponse))
       if (measurementResult.status !== 'in-progress') break
       await new Promise((resolve) => setTimeout(resolve, Math.min(1000, Math.max(1, deadline - Date.now()))))
     }
@@ -247,11 +261,11 @@ export async function getStatusWithGlobalPing(
     const location = globalPingLocation(first)
 
     if (monitor.method === 'TCP_PING') {
-      return { location, status: successfulProbe(Math.round(finiteNonNegative(first.result.stats?.avg, 'latency'))) }
+      return { location, status: successfulProbe(probePing(first.result.stats?.avg, 'latency')) }
     }
 
-    const ping = finiteNonNegative(first.result.timings?.total, 'latency')
-    const code = finiteNonNegative(first.result.statusCode, 'status code')
+    const ping = probePing(first.result.timings?.total, 'latency')
+    const code = globalPingStatusCode(first.result.statusCode)
     const checkFailure = await httpResponseBasicCheck(monitor, code, async () => {
       const body = first.result.rawBody ?? ''
       if (typeof body !== 'string') throw new Error('Invalid Globalping body')
@@ -262,11 +276,11 @@ export async function getStatusWithGlobalPing(
     })
     if (checkFailure) {
       logEvent('response_check_failed', { monitorId: monitor.id })
-      return { location, status: failedProbe(checkFailure.publicMessage, checkFailure.internalError, ping) }
+      return { location, status: failedProbe(checkFailure.internalError, ping) }
     }
     if (monitor.target.toLowerCase().startsWith('https') && !first.result.tls?.authorized) {
       logEvent('tls_certificate_untrusted', { monitorId: monitor.id })
-      return { location, status: failedProbe('TLS validation failed', 'TLS certificate not trusted', ping) }
+      return { location, status: failedProbe('TLS validation: certificate not trusted', ping) }
     }
     return { location, status: successfulProbe(ping) }
   } catch (error) {
@@ -279,8 +293,9 @@ export async function getStatusWithGlobalPing(
     return {
       location: 'ERROR',
       status: failedProbe(
-        timedOut ? 'Timeout' : 'Connection failed',
-        boundedError(error, 'Globalping error'),
+        timedOut
+          ? timeoutDiagnostic(error, 'Globalping deadline exceeded')
+          : connectionDiagnostic(error, 'Globalping error'),
         timedOut ? timeout : 0
       ),
     }
@@ -309,8 +324,9 @@ export async function getStatus(
       const timedOut = isTimeout(error)
       logEvent('tcp_connection_failed', { monitorId: monitor.id })
       return failedProbe(
-        timedOut ? 'Timeout' : 'Connection failed',
-        boundedError(error, 'TCP connection error'),
+        timedOut
+          ? timeoutDiagnostic(error, 'TCP connection deadline exceeded')
+          : connectionDiagnostic(error, 'TCP connection error'),
         timedOut ? timeout : 0
       )
     } finally {
@@ -318,40 +334,44 @@ export async function getStatus(
     }
   }
 
-  let response: Response | undefined
   try {
     const headers = new Headers(monitor.headers as HeadersInit | undefined)
     if (!headers.has('user-agent')) {
       headers.set('user-agent', 'UptimeFlare/1.0 (+https://github.com/lyc8503/UptimeFlare)')
     }
-    response = await fetchTimeout(monitor.target, timeout, {
-      method: monitor.method,
-      headers,
-      body: monitor.body,
-      cf: { cacheTtlByStatus: { '100-599': -1 } },
-    })
-    const ping = Date.now() - startTime
-    logEvent('http_response_received', { monitorId: monitor.id, status: response.status })
-    const checkFailure = await httpResponseBasicCheck(
-      monitor,
-      response.status,
-      () => readTextLimited(response!)
+    return await fetchAndConsumeWithTimeout(
+      monitor.target,
+      timeout,
+      async (response, signal) => {
+        logEvent('http_response_received', { monitorId: monitor.id, status: response.status })
+        const checkFailure = await httpResponseBasicCheck(
+          monitor,
+          response.status,
+          () => readTextLimited(response, 65_536, signal)
+        )
+        const ping = Date.now() - startTime
+        if (checkFailure) {
+          logEvent('response_check_failed', { monitorId: monitor.id })
+          return failedProbe(checkFailure.internalError, ping)
+        }
+        return successfulProbe(ping)
+      },
+      {
+        method: monitor.method,
+        headers,
+        body: monitor.body,
+        cf: { cacheTtlByStatus: { '100-599': -1 } },
+      }
     )
-    if (checkFailure) {
-      logEvent('response_check_failed', { monitorId: monitor.id })
-      return failedProbe(checkFailure.publicMessage, checkFailure.internalError, ping)
-    }
-    return successfulProbe(ping)
   } catch (error) {
     const timedOut = isTimeout(error)
     logEvent('http_request_failed', { monitorId: monitor.id })
     return failedProbe(
-      timedOut ? 'Timeout' : 'Connection failed',
-      boundedError(error, 'HTTP request error'),
+      timedOut
+        ? timeoutDiagnostic(error, 'HTTP request deadline exceeded')
+        : connectionDiagnostic(error, 'HTTP request error'),
       timedOut ? timeout : 0
     )
-  } finally {
-    await Promise.resolve(response?.body?.cancel()).catch(() => undefined)
   }
 }
 
@@ -379,22 +399,27 @@ function customProxyAllowed(monitor: MonitorTarget, allowedHosts?: string[]): bo
 
 async function customProxyMonitor(monitor: MonitorTarget, allowedHosts?: string[]) {
   if (!customProxyAllowed(monitor, allowedHosts)) throw new Error('Custom proxy host is not allowed')
-  let response: Response | undefined
-  try {
-    response = await fetchTimeout(monitor.checkProxy!, monitor.timeout ?? DEFAULT_TIMEOUT, {
+  return fetchAndConsumeWithTimeout(
+    monitor.checkProxy!,
+    monitor.timeout ?? DEFAULT_TIMEOUT,
+    async (response, signal) => {
+      if (response.status >= 300 && response.status <= 399) {
+        throw new Error('Custom proxy redirect rejected')
+      }
+      if (!response.ok) throw new Error('Custom proxy request failed')
+      const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase()
+      if (contentType !== 'application/json' && !contentType?.endsWith('+json')) {
+        throw new Error('Custom proxy returned non-JSON content')
+      }
+      return parseProxyResult(await readJsonLimited(response, signal))
+    },
+    {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(proxyDto(monitor)),
-    })
-    if (!response.ok) throw new Error('Custom proxy request failed')
-    const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase()
-    if (contentType !== 'application/json' && !contentType?.endsWith('+json')) {
-      throw new Error('Custom proxy returned non-JSON content')
+      redirect: 'manual',
     }
-    return parseProxyResult(await readJsonLimited(response))
-  } finally {
-    await Promise.resolve(response?.body?.cancel()).catch(() => undefined)
-  }
+  )
 }
 
 export async function doMonitor(
@@ -439,8 +464,9 @@ export async function doMonitor(
       } else {
         const timedOut = isTimeout(error)
         status = failedProbe(
-          timedOut ? 'Timeout' : 'Connection failed',
-          boundedError(error, 'Check proxy error'),
+          timedOut
+            ? timeoutDiagnostic(error, 'Check proxy deadline exceeded')
+            : connectionDiagnostic(error, 'Check proxy error'),
           timedOut ? monitor.timeout ?? DEFAULT_TIMEOUT : 0
         )
       }

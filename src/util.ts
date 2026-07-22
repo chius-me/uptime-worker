@@ -1,21 +1,23 @@
 import { MonitorTarget, WebhookConfig, WorkerConfig } from '../types/config'
 import { maintenances } from '../uptime.config'
 import { logEvent } from './log'
-import { readTextLimited } from './probe'
+import { fetchAndConsumeWithTimeout, readTextLimited } from './probe'
 
 import type { Env } from './index'
 
 async function getWorkerLocation() {
-  let res: Response | undefined
   try {
-    res = await fetchTimeout('https://cloudflare.com/cdn-cgi/trace', 3000)
-    if (!res.ok) return 'unknown'
-    const text = await readTextLimited(res, 4096)
-    return /^colo=([A-Za-z0-9_-]{1,32})$/m.exec(text)?.[1] ?? 'unknown'
+    return await fetchAndConsumeWithTimeout(
+      'https://cloudflare.com/cdn-cgi/trace',
+      3000,
+      async (response, signal) => {
+        if (!response.ok) return 'unknown'
+        const text = await readTextLimited(response, 4096, signal)
+        return /^colo=([A-Za-z0-9_-]{1,32})$/m.exec(text)?.[1] ?? 'unknown'
+      }
+    )
   } catch {
     return 'unknown'
-  } finally {
-    await Promise.resolve(res?.body?.cancel()).catch(() => undefined)
   }
 }
 

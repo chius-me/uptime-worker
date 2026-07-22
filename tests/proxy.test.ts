@@ -64,14 +64,50 @@ describe('custom and Durable Object proxies', () => {
   })
 
   it('strictly validates proxy result fields', () => {
-    expect(() => parseProxyResult({
-      location: 'SJC',
-      status: { ping: -1, up: true, internalError: '', publicMessage: 'OK' },
-    })).toThrow()
+    for (const ping of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 65_536]) {
+      expect(() => parseProxyResult({
+        location: 'SJC',
+        status: { ping, up: true, internalError: '', publicMessage: 'OK' },
+      })).toThrow()
+    }
     expect(() => parseProxyResult({
       location: 'x'.repeat(257),
       status: { ping: 1, up: true, internalError: '', publicMessage: 'OK' },
     })).toThrow()
+    expect(parseProxyResult({
+      location: 'SJC',
+      status: { ping: 65_535, up: true, internalError: '', publicMessage: 'OK' },
+    }).status.ping).toBe(65_535)
+  })
+
+  it('requires the claimed public category to match the internal diagnostic', () => {
+    expect(() => parseProxyResult({
+      location: 'SJC',
+      status: { ping: 1, up: false, internalError: 'deadline exceeded', publicMessage: 'Timeout' },
+    })).toThrow()
+    expect(parseProxyResult({
+      location: 'SJC',
+      status: { ping: 1, up: false, internalError: 'Timeout: deadline exceeded', publicMessage: 'Timeout' },
+    }).status.publicMessage).toBe('Timeout')
+  })
+
+  it('does not follow a redirect away from an allowlisted custom proxy', async () => {
+    const accepted = JSON.stringify({
+      location: 'SJC',
+      status: { ping: 12, up: true, internalError: '', publicMessage: 'OK' },
+    })
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.redirect === 'manual') {
+        return new Response(null, { status: 302, headers: { location: 'https://evil.example/check' } })
+      }
+      return new Response(accepted, { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await doMonitor(secretMonitor, 'SJC', env)
+
+    expect(fetchMock.mock.calls[0][1]?.redirect).toBe('manual')
+    expect(result).toMatchObject({ id: 'api', status: { up: false, publicMessage: 'Connection failed' } })
   })
 
   it('includes region in the Durable Object name', () => {
