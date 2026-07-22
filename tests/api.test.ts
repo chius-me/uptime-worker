@@ -51,6 +51,26 @@ describe('public status API contracts', () => {
     expect(payload.monitoringStatus).toBe('initializing')
   })
 
+  it('returns an unknown summary when an incident exists without a latency sample', () => {
+    const payload = buildDataPayload(
+      {
+        ...emptyState,
+        lastUpdate: 1_000,
+        incident: { api: [{ start: [900], end: 1_000, error: ['dummy'] }] },
+      },
+      [monitor('api')],
+      page,
+      1_010
+    )
+
+    expect(payload.monitors.api).toEqual({
+      up: null,
+      latency: null,
+      location: null,
+      message: 'Not checked yet',
+    })
+  })
+
   it('marks data stale after 180 seconds and makes every monitor unknown', () => {
     const payload = buildDataPayload(stateAt(1_000), [monitor('api')], page, 1_181)
 
@@ -70,6 +90,88 @@ describe('public status API contracts', () => {
 
     expect(payload.state.incident.old).toBeUndefined()
     expect(JSON.stringify(payload)).not.toContain('internal.lan')
+  })
+
+  it('does not expose custom proxy locations anywhere in the public payload', () => {
+    const payload = buildDataPayload(
+      {
+        ...emptyState,
+        lastUpdate: 1_000,
+        incident: {
+          custom: [{ start: [900], end: 1_000, error: ['dummy'] }],
+          customHttp: [{ start: [900], end: 1_000, error: ['dummy'] }],
+        },
+        latency: {
+          custom: [{ time: 1_000, ping: 42, loc: 'internal.service.local' }],
+          customHttp: [{ time: 1_000, ping: 42, loc: 'private-proxy.example:8443' }],
+        },
+      },
+      [
+        { ...monitor('custom'), checkProxy: 'https://proxy.example' },
+        { ...monitor('customHttp'), checkProxy: 'http://proxy.example' },
+      ],
+      page,
+      1_010
+    )
+
+    const publicPayload = JSON.stringify(payload)
+    expect(payload.monitors.custom.location).toBeNull()
+    expect(payload.monitors.customHttp.location).toBeNull()
+    expect(publicPayload).not.toContain('internal.service.local')
+    expect(publicPayload).not.toContain('private-proxy.example')
+  })
+
+  it('exposes only valid local and worker colo locations', () => {
+    const payload = buildDataPayload(
+      {
+        ...emptyState,
+        lastUpdate: 1_000,
+        incident: {
+          local: [{ start: [900], end: 1_000, error: ['dummy'] }],
+          worker: [{ start: [900], end: 1_000, error: ['dummy'] }],
+        },
+        latency: {
+          local: [{ time: 1_000, ping: 42, loc: 'SFO' }],
+          worker: [{ time: 1_000, ping: 42, loc: 'internal.service.local' }],
+        },
+      },
+      [monitor('local'), { ...monitor('worker'), checkProxy: 'worker://checker' }],
+      page,
+      1_010
+    )
+
+    expect(payload.monitors.local.location).toBe('SFO')
+    expect(payload.state.latency.local[0].loc).toBe('SFO')
+    expect(payload.monitors.worker.location).toBeNull()
+    expect(payload.state.latency.worker[0].loc).toBeNull()
+  })
+
+  it('exposes bounded Globalping country/city locations only', () => {
+    const payload = buildDataPayload(
+      {
+        ...emptyState,
+        lastUpdate: 1_000,
+        incident: {
+          globalping: [{ start: [900], end: 1_000, error: ['dummy'] }],
+          malformed: [{ start: [900], end: 1_000, error: ['dummy'] }],
+        },
+        latency: {
+          globalping: [{ time: 1_000, ping: 42, loc: 'US/New York' }],
+          malformed: [{ time: 1_000, ping: 42, loc: 'US/New York/Extra' }],
+        },
+      },
+      [
+        { ...monitor('globalping'), checkProxy: 'globalping://probes' },
+        { ...monitor('malformed'), checkProxy: 'globalping://probes' },
+      ],
+      page,
+      1_010
+    )
+
+    expect(payload.monitors.globalping.location).toBe('US/New York')
+    expect(payload.state.latency.globalping[0].loc).toBe('US/New York')
+    expect(payload.monitors.malformed.location).toBeNull()
+    expect(payload.state.latency.malformed[0].loc).toBeNull()
   })
 
   it('normalizes all public error messages', () => {

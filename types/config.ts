@@ -144,7 +144,7 @@ export type DataPayload = {
   monitorsConfig: Pick<MonitorTarget, 'id' | 'name' | 'tooltip' | 'statusPageLink' | 'hideLatencyChart'>[]
   state: {
     incident: Record<string, PublicIncident[]>
-    latency: Record<string, LatencyRecord[]>
+    latency: Record<string, PublicLatencyRecord[]>
   }
 }
 
@@ -152,6 +152,10 @@ export type LatencyRecord = {
   loc: string
   ping: number
   time: number
+}
+
+export type PublicLatencyRecord = Omit<LatencyRecord, 'loc'> & {
+  loc: string | null
 }
 
 export type MonitorState = {

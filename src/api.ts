@@ -107,6 +107,19 @@ export function getMonitoringStatus(lastUpdate: number, now: number): {
   }
 }
 
+export function publicLocation(location: string, monitor: MonitorTarget): string | null {
+  const proxy = monitor.checkProxy
+  if (!proxy || proxy.startsWith('worker://')) {
+    return /^[A-Z]{3}$/.test(location) ? location : null
+  }
+  if (proxy.startsWith('globalping://')) {
+    return location.length <= 64 && /^[^\x00-\x1F\x7F/]+\/[^\x00-\x1F\x7F/]+$/.test(location)
+      ? location
+      : null
+  }
+  return null
+}
+
 function publicPageConfig(page: PageConfig): PageConfig {
   return {
     title: page.title || 'UptimeWorker',
@@ -129,15 +142,15 @@ function summaryForMonitor(
   const lastIncident = incidents[incidents.length - 1]
   const lastLatency = latencies[latencies.length - 1]
 
-  if (stale || !lastIncident) {
+  if (stale || !lastIncident || !lastLatency) {
     return { up: null, latency: null, location: null, message: 'Not checked yet' }
   }
 
   const up = lastIncident.end !== null
   return {
     up,
-    latency: lastLatency?.ping ?? null,
-    location: lastLatency?.loc ?? null,
+    latency: lastLatency.ping,
+    location: publicLocation(lastLatency.loc, monitor),
     message: up ? 'OK' : publicMessage(lastIncident.error[lastIncident.error.length - 1] ?? ''),
   }
 }
@@ -150,6 +163,7 @@ export function buildDataPayload(
 ): DataPayload {
   const { stale, monitoringStatus } = getMonitoringStatus(state.lastUpdate, now)
   const configuredIds = new Set(monitorsConfig.map(({ id }) => id))
+  const monitorById = new Map(monitorsConfig.map((monitor) => [monitor.id, monitor]))
   const monitors = Object.fromEntries(
     monitorsConfig.map((monitor) => [monitor.id, summaryForMonitor(state, monitor, stale)])
   )
@@ -161,7 +175,13 @@ export function buildDataPayload(
   const latency = Object.fromEntries(
     Object.entries(state.latency)
       .filter(([id]) => configuredIds.has(id))
-      .map(([id, samples]) => [id, samples])
+      .map(([id, samples]) => [
+        id,
+        samples.map((sample) => ({
+          ...sample,
+          loc: publicLocation(sample.loc, monitorById.get(id)!),
+        })),
+      ])
   )
 
   return {

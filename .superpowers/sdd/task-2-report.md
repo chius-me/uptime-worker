@@ -126,3 +126,73 @@ Output:
 ## Concerns
 
 None for this scope. The v1 compatibility fields are intentionally transitional and remain until the planned frontend migration.
+
+## Review-remediation evidence
+
+### RED
+
+Command:
+
+```sh
+npx vitest run tests/api.test.ts
+```
+
+Output:
+
+```text
+ RUN  v4.1.10 /Users/chius/repo/github/uptime-worker/.worktrees/codex-review-remediation
+
+ ❯ tests/api.test.ts (15 tests | 4 failed)
+     × returns an unknown summary when an incident exists without a latency sample
+     × does not expose custom proxy locations anywhere in the public payload
+     × exposes only valid local and worker colo locations
+     × exposes bounded Globalping country/city locations only
+
+ FAIL  tests/api.test.ts > public status API contracts > returns an unknown summary when an incident exists without a latency sample
+AssertionError: expected { up: true, latency: null, …(2) } to deeply equal { up: null, latency: null, …(2) }
+
+ FAIL  tests/api.test.ts > public status API contracts > does not expose custom proxy locations anywhere in the public payload
+AssertionError: expected 'internal.service.local' to be null
+
+ FAIL  tests/api.test.ts > public status API contracts > exposes only valid local and worker colo locations
+AssertionError: expected 'internal.service.local' to be null
+
+ FAIL  tests/api.test.ts > public status API contracts > exposes bounded Globalping country/city locations only
+AssertionError: expected 'US/New York/Extra' to be null
+
+ Test Files  1 failed (1)
+      Tests  4 failed | 11 passed (15)
+```
+
+### GREEN
+
+Command:
+
+```sh
+npx vitest run tests/api.test.ts && npx tsc --noEmit
+```
+
+Output:
+
+```text
+ RUN  v4.1.10 /Users/chius/repo/github/uptime-worker/.worktrees/codex-review-remediation
+
+ Test Files  1 passed (1)
+      Tests  15 passed (15)
+```
+
+`npx tsc --noEmit` completed with exit code 0 and no output.
+
+### Review-remediation self-review
+
+- A monitor summary is now `unknown` unless both the latest incident and latest latency sample exist.
+- `publicLocation` is applied independently to summary and copied public latency records; stored latency is never mutated.
+- Local and `worker://` checks expose only exactly three uppercase ASCII characters.
+- `globalping://` checks expose only non-empty two-part values with one slash, no control characters, and a maximum of 64 characters.
+- HTTP(S) and all other custom proxy sources expose no location.
+- Verified the serialized public payload contains neither tested custom-proxy location value.
+- `git diff --check` passed.
+
+### Review-remediation concerns
+
+None.
