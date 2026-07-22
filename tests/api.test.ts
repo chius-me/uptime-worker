@@ -39,6 +39,14 @@ function envWithState(state: MonitorState) {
   } as any
 }
 
+function envWithRawState(value: string) {
+  return {
+    UPTIME_WORKER_D1: {
+      prepare: () => ({ bind: () => ({ first: async () => ({ value }) }) }),
+    },
+  } as any
+}
+
 describe('public status API contracts', () => {
   it('returns a nullable summary for a configured monitor with no samples', () => {
     const payload = buildDataPayload(emptyState, [monitor('new')], page, 1_000)
@@ -341,5 +349,43 @@ describe('public status API contracts', () => {
 
     expect(health.status).toBe(200)
     await expect(health.json()).resolves.toEqual({ monitoringStatus: 'healthy', updatedAt: 1000, stale: false })
+  })
+
+  it('returns a fixed non-cacheable 503 for corrupt stored state', async () => {
+    const corrupt = JSON.stringify({
+      schemaVersion: 2,
+      lastUpdate: 1_000,
+      lastRun: 1_000,
+      overallUp: 1,
+      overallDown: 0,
+      monitoringStartedAt: {},
+      incident: {},
+      latency: { blog: { loc: { v: ['SFO'], c: [1] }, ping: 'zz00', time: 'e8030000' } },
+    })
+
+    const badge = await handleBadgeAPI(
+      new Request('https://example.test/api/badge?id=blog'),
+      envWithRawState(corrupt),
+      1_010
+    )
+    const health = await handleHealthAPI(envWithRawState(corrupt), 1_010)
+
+    for (const response of [badge, health]) {
+      expect(response.status).toBe(503)
+      expect(response.headers.get('cache-control')).toBe('no-store')
+      await expect(response.json()).resolves.toEqual({ error: 'State unavailable' })
+    }
+  })
+
+  it('does not mask unrelated state-store errors', async () => {
+    const env = {
+      UPTIME_WORKER_D1: {
+        prepare: () => ({
+          bind: () => ({ first: async () => { throw new Error('database offline') } }),
+        }),
+      },
+    } as any
+
+    await expect(handleHealthAPI(env, 1_010)).rejects.toThrow('database offline')
   })
 })

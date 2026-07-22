@@ -11,7 +11,7 @@ import type {
 } from '../types/config'
 import type { Env } from './index'
 import { publicMessageForInternalError } from './probe'
-import { CompactedMonitorStateWrapper, getFromStore } from './store'
+import { CompactedMonitorStateWrapper, CorruptStateError, getFromStore } from './store'
 
 const STALE_AFTER_SECONDS = 180
 const globalpingLocationPart = /^[\p{L} '-]+$/u
@@ -21,6 +21,22 @@ const jsonHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
+}
+
+export function stateUnavailableResponse(): Response {
+  return new Response(JSON.stringify({ error: 'State unavailable' }), {
+    status: 503,
+    headers: { ...jsonHeaders, 'Cache-Control': 'no-store' },
+  })
+}
+
+async function readMonitorState(env: Env): Promise<CompactedMonitorStateWrapper | Response> {
+  try {
+    return new CompactedMonitorStateWrapper(await getFromStore(env, 'state'))
+  } catch (error) {
+    if (error instanceof CorruptStateError) return stateUnavailableResponse()
+    throw error
+  }
 }
 
 const publicMessages = new Set<PublicMessage>([
@@ -235,7 +251,9 @@ export async function handleBadgeAPI(request: Request, env: Env, now = Math.roun
     })
   }
 
-  const compactedState = new CompactedMonitorStateWrapper(await getFromStore(env, 'state'))
+  const stateOrResponse = await readMonitorState(env)
+  if (stateOrResponse instanceof Response) return stateOrResponse
+  const compactedState = stateOrResponse
   const { stale } = getMonitoringStatus(compactedState.data.lastUpdate, now)
   if (stale) {
     return new Response(JSON.stringify({ schemaVersion: 1, label, message: 'unknown', color: 'lightgrey' }), {
@@ -259,7 +277,9 @@ export async function handleBadgeAPI(request: Request, env: Env, now = Math.roun
 }
 
 export async function handleHealthAPI(env: Env, now = Math.round(Date.now() / 1000)): Promise<Response> {
-  const compactedState = new CompactedMonitorStateWrapper(await getFromStore(env, 'state'))
+  const stateOrResponse = await readMonitorState(env)
+  if (stateOrResponse instanceof Response) return stateOrResponse
+  const compactedState = stateOrResponse
   const { stale, monitoringStatus } = getMonitoringStatus(compactedState.data.lastUpdate, now)
   return new Response(
     JSON.stringify({ monitoringStatus, updatedAt: compactedState.data.lastUpdate, stale }),

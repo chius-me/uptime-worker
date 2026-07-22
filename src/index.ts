@@ -5,9 +5,9 @@ import { doMonitor, getStatus } from './monitor'
 import { formatAndNotify, getWorkerLocation } from './util'
 import { validateAndResolveConfig } from './config'
 import { logEvent } from './log'
-import { CompactedMonitorStateWrapper, getFromStore, setToStore } from './store'
+import { CompactedMonitorStateWrapper, CorruptStateError, getFromStore, setToStore } from './store'
 import { isBasicAuthValid } from './auth'
-import { buildDataPayload, handleBadgeAPI, handleHealthAPI } from './api'
+import { buildDataPayload, handleBadgeAPI, handleHealthAPI, stateUnavailableResponse } from './api'
 import { withSecurityHeaders } from './security'
 import type { ProbeStatus } from './probe'
 import pLimit from 'p-limit'
@@ -337,9 +337,13 @@ async function handleDataAPI(env: Env, ctx: ExecutionContext): Promise<Response>
   const cached = await cache.match(cacheKey)
   if (cached) return cached
 
-  const compactedState = new CompactedMonitorStateWrapper(
-    await getFromStore(env, 'state')
-  )
+  let compactedState: CompactedMonitorStateWrapper
+  try {
+    compactedState = new CompactedMonitorStateWrapper(await getFromStore(env, 'state'))
+  } catch (error) {
+    if (error instanceof CorruptStateError) return stateUnavailableResponse()
+    throw error
+  }
 
   // Uncompact full state for SPA to render 90-day bars & latency chart.
   const fullState = compactedState.uncompact()

@@ -115,6 +115,37 @@ export type PublicIncidentChange = {
   publicMessage: PublicMessage
 }
 
+export type ErrorChange = {
+  at: number
+  internalError: string
+  publicMessage: PublicMessage
+}
+
+export type IncidentRecordV2 = {
+  id: string
+  startedAt: number
+  resolvedAt: number | null
+  changes: ErrorChange[]
+  downEventKey: string | null
+  recoveryEventKey: string | null
+  downNotifiedAt: number | null
+  recoveryNotifiedAt: number | null
+}
+
+export type NotificationPayload = {
+  startedAt: number
+  checkedAt: number
+  publicMessage: PublicMessage
+}
+
+export type NotificationEvent = {
+  eventKey: string
+  incidentId: string
+  monitorId: string
+  kind: 'down' | 'recovery'
+  payload: NotificationPayload
+}
+
 // v1 chart fields are retained until the frontend consumes the v2 fields.
 export type PublicIncident = {
   id: string
@@ -178,7 +209,7 @@ export type MonitorState = {
 // Real world test with 8 monitors and a few hundred incidents and full latency data (status.lyc8503.net):
 // original: 433KB size, 11.24ms P50 cpu time, 18.11ms P99 cpu time
 // compacted: 181KB size (59% smaller), 6.36ms P50 cpu time (43% faster), 8.86ms P99 cpu time (51% faster)
-export type MonitorStateCompacted = {
+export type MonitorStateCompactedV1 = {
   lastUpdate: number
   overallUp: number
   overallDown: number
@@ -210,3 +241,27 @@ export type MonitorStateCompacted = {
     }
   >
 }
+
+type CompactedIncidentV2 = {
+  id: string[]
+  startedAt: number[]
+  resolvedAt: (number | null)[]
+  changes: ErrorChange[][]
+  downEventKey: (string | null)[]
+  recoveryEventKey: (string | null)[]
+  downNotifiedAt: (number | null)[]
+  recoveryNotifiedAt: (number | null)[]
+}
+
+export type MonitorStateCompactedV2 = {
+  schemaVersion: 2
+  lastUpdate: number
+  lastRun: number
+  overallUp: number
+  overallDown: number
+  monitoringStartedAt: Record<string, number>
+  incident: Record<string, CompactedIncidentV2>
+  latency: MonitorStateCompactedV1['latency']
+}
+
+export type MonitorStateCompacted = MonitorStateCompactedV2

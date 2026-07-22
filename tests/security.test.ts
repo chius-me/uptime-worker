@@ -89,6 +89,49 @@ describe('worker security boundary', () => {
     }
   })
 
+  it('returns secured 503 responses for corrupt state on every state-reading API route', async () => {
+    workerConfig.passwordProtection = undefined
+    const corrupt = JSON.stringify({
+      schemaVersion: 2,
+      lastUpdate: 1_000,
+      lastRun: 1_000,
+      overallUp: 1,
+      overallDown: 0,
+      monitoringStartedAt: {},
+      incident: {},
+      latency: { blog: { loc: { v: ['SFO'], c: [2] }, ping: '2a00', time: 'e8030000' } },
+    })
+    const env = {
+      ...envWithAssets(async () => new Response('asset')),
+      UPTIME_WORKER_D1: {
+        prepare: () => ({ bind: () => ({ first: async () => ({ value: corrupt }) }) }),
+      },
+    } as any
+    const originalCaches = Object.getOwnPropertyDescriptor(globalThis, 'caches')
+    Object.defineProperty(globalThis, 'caches', {
+      configurable: true,
+      value: { default: { match: async () => undefined, put: async () => undefined } },
+    })
+
+    try {
+      const responses = await Promise.all([
+        worker.fetch(new Request('https://status.example.test/api/data'), env, ctx),
+        worker.fetch(new Request('https://status.example.test/api/badge?id=blog'), env, ctx),
+        worker.fetch(new Request('https://status.example.test/api/health'), env, ctx),
+      ])
+
+      for (const response of responses) {
+        expect(response.status).toBe(503)
+        expect(response.headers.get('cache-control')).toBe('no-store')
+        expectSecurityHeaders(response)
+        await expect(response.json()).resolves.toEqual({ error: 'State unavailable' })
+      }
+    } finally {
+      if (originalCaches) Object.defineProperty(globalThis, 'caches', originalCaches)
+      else Reflect.deleteProperty(globalThis, 'caches')
+    }
+  })
+
   it('adds security headers to static assets and explicit SPA fallbacks', async () => {
     workerConfig.passwordProtection = undefined
     const requestedPaths: string[] = []
