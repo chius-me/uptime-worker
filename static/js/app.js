@@ -247,6 +247,9 @@ function renderMonitor(mon, monData, state) {
     ? `<a href="${esc(mon.statusPageLink)}" target="_blank" style="color:inherit;display:flex;align-items:center;gap:8px">${icon} <span>${esc(mon.name)}</span></a>`
     : `<span style="display:flex;align-items:center;gap:8px">${icon} <span>${esc(mon.name)}</span></span>`
 
+  const latencies = state?.latency?.[mon.id] || []
+  const responseSummary = chartSummary(mon.name, latencies)
+
   return `
     <div class="monitor-header">
       <div class="monitor-name" title="${esc(mon.tooltip || '')}">${nameHtml}</div>
@@ -255,7 +258,8 @@ function renderMonitor(mon, monData, state) {
     <div class="uptime-bars" id="bars-${mon.id}"></div>
     ${mon.hideLatencyChart ? '' : `
       <div class="chart-container" id="chart-wrap-${mon.id}">
-        <canvas id="chart-${mon.id}"></canvas>
+        <canvas id="chart-${mon.id}" role="img" tabindex="0" aria-label="${esc(I18N.t('Response times'))}: ${esc(mon.name)}" aria-describedby="chart-summary-${mon.id}"></canvas>
+        <p class="sr-only" id="chart-summary-${mon.id}">${esc(responseSummary)}</p>
         <div class="chart-tooltip" id="chart-tooltip-${mon.id}"></div>
       </div>
     `}
@@ -263,41 +267,69 @@ function renderMonitor(mon, monData, state) {
 }
 
 // ── Uptime Bars (90 days) ────────────────────────
+function startOfLocalDaySeconds(date = new Date()) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime() / 1000
+}
+
+function incidentStart(incident) {
+  return typeof incident?.startedAt === 'number' ? incident.startedAt : incident?.start?.[0]
+}
+
+function incidentEnd(incident) {
+  return typeof incident?.resolvedAt === 'number' || incident?.resolvedAt === null
+    ? incident.resolvedAt
+    : incident?.end
+}
+
+function isMonitoringDummyIncident(incident) {
+  const start = incident?.start
+  const error = incident?.error
+  return Array.isArray(start) && start.length === 1 &&
+    Array.isArray(error) && error.length === 1 && error[0] === 'dummy' &&
+    incident.end !== null && incident.end === start[0]
+}
+
+function monitoredIncidents(state, monId) {
+  return (state?.incident?.[monId] || []).filter(incident =>
+    typeof incidentStart(incident) === 'number' && !isMonitoringDummyIncident(incident)
+  )
+}
+
 function drawBars(monId, state) {
   const container = document.getElementById(`bars-${monId}`)
   if (!container) return
 
-  const incidents = state?.incident?.[monId]
+  const incidents = monitoredIncidents(state, monId)
   if (!incidents || incidents.length === 0) {
     container.innerHTML = ''
     return
   }
 
   const now = Math.round(Date.now() / 1000)
-  const todayStart = Math.floor(Date.now() / 86400000) * 86400
+  const today = new Date()
 
   function overlap(x1, x2, y1, y2) {
     return Math.max(0, Math.min(x2, y2) - Math.max(x1, y1))
   }
 
-  const bars = []
   container.innerHTML = '' // Clear existing
   for (let i = 89; i >= 0; i--) {
-    const dayStart = todayStart - i * 86400
-    const dayEnd = dayStart + 86400
+    const dayStart = startOfLocalDaySeconds(new Date(today.getFullYear(), today.getMonth(), today.getDate() - i))
+    const dayEnd = startOfLocalDaySeconds(new Date(today.getFullYear(), today.getMonth(), today.getDate() - i + 1))
     let dayDown = 0
 
     for (const inc of incidents) {
-      dayDown += overlap(dayStart, dayEnd, inc.start[0], inc.end ?? now)
+      dayDown += overlap(dayStart, dayEnd, incidentStart(inc), incidentEnd(inc) ?? now)
     }
 
     // Total monitored time in this day (from first incident start)
-    const monStart = incidents[0].start[0]
+    const monStart = Math.min(...incidents.map(incidentStart))
     const dayMonTime = overlap(dayStart, dayEnd, monStart, now)
     const pct = dayMonTime > 0 ? ((dayMonTime - dayDown) / dayMonTime * 100) : NaN
 
     const bar = document.createElement('div')
     bar.className = 'uptime-bar tooltip'
+    bar.tabIndex = 0
     bar.style.background = barColor(pct)
     bar.innerHTML = `<span class="tooltip-text">${isNaN(pct) ? I18N.t('No Data') : pct.toPrecision(4) + '%'}<br>${new Date(dayStart * 1000).toLocaleDateString()}</span>`
     container.appendChild(bar)
@@ -308,19 +340,28 @@ function calcAndSetUptime(monId, state) {
   const el = document.getElementById(`uptime-${monId}`)
   if (!el) return
 
-  const incidents = state?.incident?.[monId]
+  const incidents = monitoredIncidents(state, monId)
   if (!incidents || incidents.length === 0) return
 
   const now = Math.round(Date.now() / 1000)
-  const firstStart = incidents[0].start[0]
+  const firstStart = Math.min(...incidents.map(incidentStart))
   let totalDown = 0
   for (const inc of incidents) {
-    totalDown += (inc.end ?? now) - inc.start[0]
+    totalDown += (incidentEnd(inc) ?? now) - incidentStart(inc)
   }
   const totalTime = now - firstStart
   const pct = totalTime > 0 ? ((totalTime - totalDown) / totalTime * 100).toPrecision(4) : '100.0'
   el.textContent = I18N.t('Overall', { percent: pct })
   el.style.color = barColor(pct)
+}
+
+function chartSummary(monitorName, latencies) {
+  if (!latencies || latencies.length === 0) {
+    return `${I18N.t('Response times')}: ${monitorName}. ${I18N.t('No data available')}`
+  }
+  const values = latencies.map(sample => sample.ping)
+  const latest = values[values.length - 1]
+  return `${I18N.t('Response times')}: ${monitorName}. ${I18N.t('Minimum')}: ${Math.min(...values)} ms. ${I18N.t('Maximum')}: ${Math.max(...values)} ms. ${I18N.t('Latest')}: ${latest} ms.`
 }
 
 // ── Latency Chart (Canvas with Bezier curves & Mouseover Interactive Tooltips) ──
@@ -545,17 +586,84 @@ function drawChart(monId, state, hoverPoint = null) {
 }
 
 // ── Incidents Page ──────────────────────────────
-function renderIncidents(container) {
-  const m = apiData?.maintenances || []
-  if (m.length === 0) {
-    const msg = I18N.t('No incidents')
-    container.innerHTML = `<div class="empty-state">${esc(msg)}</div>`
-    return
+function publicIncidentMessage(incident) {
+  const changes = incident?.changes
+  if (Array.isArray(changes) && changes.length > 0) {
+    return changes[changes.length - 1]?.publicMessage || I18N.t('Unknown')
   }
-  let html = `<div class="empty-state">${I18N.t('Incidents history')}</div>`
-  m.forEach(maintenance => {
-    html += renderMaintenance(maintenance, false, apiData.config)
+  if (Array.isArray(incident?.error) && incident.error.length > 0) {
+    return incident.error[incident.error.length - 1]
+  }
+  return I18N.t('Unknown')
+}
+
+function buildIncidentTimeline(state, monitorsConfig, nowSeconds = Math.round(Date.now() / 1000)) {
+  const monitorsById = new Map((monitorsConfig || []).map(monitor => [monitor.id, monitor]))
+  const incidentsByMonitor = state?.incident || {}
+  const incidents = []
+
+  Object.entries(incidentsByMonitor).forEach(([monitorId, monitorIncidents]) => {
+    const monitor = monitorsById.get(monitorId)
+    if (!monitor || !Array.isArray(monitorIncidents)) return
+
+    monitorIncidents.forEach(incident => {
+      const startedAt = incidentStart(incident)
+      if (typeof startedAt !== 'number' || isMonitoringDummyIncident(incident)) return
+      const resolvedAt = incidentEnd(incident) ?? null
+      incidents.push({
+        id: incident.id || `${monitorId}:${startedAt}`,
+        monitorId,
+        monitorName: monitor.name,
+        startedAt,
+        resolvedAt,
+        ongoing: resolvedAt === null,
+        durationSeconds: Math.max(0, (resolvedAt ?? nowSeconds) - startedAt),
+        publicMessage: publicIncidentMessage(incident),
+      })
+    })
   })
+
+  return incidents.sort((left, right) => right.startedAt - left.startedAt)
+}
+
+function formatIncidentDuration(durationSeconds) {
+  const minutes = Math.floor(durationSeconds / 60)
+  const seconds = durationSeconds % 60
+  if (minutes < 1) return `${seconds}s`
+  const hours = Math.floor(minutes / 60)
+  return hours > 0 ? `${hours}h ${minutes % 60}m` : `${minutes}m ${seconds}s`
+}
+
+function renderIncident(incident) {
+  const status = incident.ongoing ? I18N.t('Ongoing') : I18N.t('Resolved')
+  return `<article class="incident-card">
+    <div class="incident-heading">
+      <h2>${esc(incident.monitorName)}</h2>
+      <span class="incident-status ${incident.ongoing ? 'ongoing' : 'resolved'}">${esc(status)}</span>
+    </div>
+    <dl class="incident-details">
+      <div><dt>${esc(I18N.t('Affected service'))}</dt><dd>${esc(incident.monitorName)}</dd></div>
+      <div><dt>${esc(I18N.t('Error category'))}</dt><dd>${esc(incident.publicMessage)}</dd></div>
+      <div><dt>${esc(I18N.t('Duration'))}</dt><dd>${esc(formatIncidentDuration(incident.durationSeconds))}</dd></div>
+      <div><dt>${esc(I18N.t('From'))}</dt><dd>${new Date(incident.startedAt * 1000).toLocaleString()}</dd></div>
+      ${incident.resolvedAt === null ? '' : `<div><dt>${esc(I18N.t('To'))}</dt><dd>${new Date(incident.resolvedAt * 1000).toLocaleString()}</dd></div>`}
+    </dl>
+  </article>`
+}
+
+function renderIncidents(container) {
+  const incidents = buildIncidentTimeline(apiData?.state, apiData?.monitorsConfig)
+  const maintenances = apiData?.maintenances || []
+  let html = `<section class="incidents-section" aria-labelledby="incident-history-title">
+    <h1 id="incident-history-title">${esc(I18N.t('Incident history'))}</h1>
+    ${incidents.length > 0 ? incidents.map(renderIncident).join('') : `<div class="empty-state">${esc(I18N.t('No incidents'))}</div>`}
+  </section>`
+  if (maintenances.length > 0) {
+    html += `<section class="incidents-section maintenance-history" aria-labelledby="scheduled-maintenance-title">
+      <h2 id="scheduled-maintenance-title">${esc(I18N.t('Scheduled maintenance'))}</h2>
+      ${maintenances.map(maintenance => renderMaintenance(maintenance, false, apiData.config)).join('')}
+    </section>`
+  }
   container.innerHTML = html
 }
 
