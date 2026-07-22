@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { resolveConfigValue, validateAndResolveConfig } from '../src/config'
+import { resolveConfigValue, resolvePasswordProtection, validateAndResolveConfig } from '../src/config'
 
 describe('runtime configuration resolution', () => {
   it('resolves nested monitor and webhook values', () => {
@@ -15,6 +15,17 @@ describe('runtime configuration resolution', () => {
     expect(() => resolveConfigValue('<MISSING>', {}, 'monitors[0].target')).toThrow(
       'Unresolved secret MISSING at monitors[0].target'
     )
+  })
+
+  it.each([
+    ['an object', { value: 'secret' }],
+    ['a boolean', false],
+    ['an empty string', ''],
+    ['a nested placeholder', '<OTHER_SECRET>'],
+  ])('rejects %s as a password-protection secret binding', (_name, value) => {
+    expect(() => resolvePasswordProtection('member:<STATUS_PASSWORD>', {
+      STATUS_PASSWORD: value,
+    })).toThrow(/secret .*passwordProtection/i)
   })
 
   it('rejects duplicate monitor ids', () => {

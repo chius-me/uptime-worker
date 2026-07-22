@@ -57,6 +57,7 @@ export type RunDependencies = {
   getWorkerLocation?: () => Promise<string>
   maintenances?: readonly MaintenanceConfig[]
   nowMs?: () => number
+  scheduledAt?: number
 }
 
 function incidentAt(
@@ -282,7 +283,7 @@ export async function runMonitoring(
     callbacks,
     summary: {
       runId,
-      scheduledAt: now,
+      scheduledAt: dependencies.scheduledAt ?? now,
       completedAt: Math.floor(completedAtMs / 1000),
       total: config.monitors.length,
       succeeded,

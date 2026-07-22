@@ -88,6 +88,7 @@ function schedulerWith(overrides: Partial<SchedulerDependencies> = {}) {
     dispatchPendingNotifications: vi.fn(async () => ({ attempted: 0, delivered: 0, failed: 0 })),
     cleanupRetention: vi.fn(async () => undefined),
     randomUUID: () => 'uuid',
+    now: () => 1_000,
     ...overrides,
   }
   return {
@@ -130,6 +131,30 @@ describe('Scheduler', () => {
     expect(dependencies.sendHeartbeat).not.toHaveBeenCalled()
     expect(dependencies.dispatchPendingNotifications).not.toHaveBeenCalled()
     expect(dependencies.cleanupRetention).not.toHaveBeenCalled()
+  })
+
+  it('uses the actual clock for a run delayed by more than 180 seconds without changing nominal identity', async () => {
+    const runMonitoring = vi.fn(async () => {
+      const output = runOutput()
+      output.summary.runId = '1000:uuid'
+      output.summary.scheduledAt = 1
+      return output
+    })
+    const { scheduler, dependencies } = schedulerWith({
+      now: () => 201_000,
+      runMonitoring,
+    })
+
+    await scheduler.run(1_000)
+
+    expect(runMonitoring).toHaveBeenCalledWith(
+      expect.anything(),
+      config,
+      201,
+      '1000:uuid',
+      { scheduledAt: 1 }
+    )
+    expect(dependencies.cleanupRetention).toHaveBeenCalledWith(expect.anything(), 201)
   })
 
   it('dispatches immediately after persistence and isolates later cleanup and heartbeat failures', async () => {
@@ -858,6 +883,27 @@ describe('external delivery safety', () => {
       globalThis.fetch = originalFetch
     }
     expect(request).toHaveBeenCalledOnce()
+  })
+
+  it.each([
+    ['successful', 200, false],
+    ['failed', 500, true],
+  ] as const)('cancels the response body after a %s webhook response', async (_name, status, rejects) => {
+    const originalFetch = globalThis.fetch
+    const cancel = vi.fn()
+    const stream = new ReadableStream<Uint8Array>({
+      pull: () => new Promise<never>(() => undefined),
+      cancel,
+    })
+    globalThis.fetch = vi.fn(async () => new Response(stream, { status })) as typeof fetch
+    try {
+      const pending = webhookNotify({} as any, config.notification!.webhook!, 'public message')
+      if (rejects) await expect(pending).rejects.toThrow('Webhook request failed')
+      else await expect(pending).resolves.toBeUndefined()
+    } finally {
+      globalThis.fetch = originalFetch
+    }
+    expect(cancel).toHaveBeenCalledOnce()
   })
 
   it('rejects non-HTTPS heartbeat destinations without making a request or leaking the URL', async () => {

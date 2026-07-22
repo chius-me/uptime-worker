@@ -20,6 +20,7 @@ export default defineConfig({
             miniflare: {
               bindings: {
                 TEST_MIGRATIONS: await readD1Migrations(migrationsPath),
+                TEST_PASSWORD_PROTECTION: 'secret-from-binding',
               },
             },
           })),

@@ -49,6 +49,7 @@ export type SchedulerDependencies = {
   dispatchPendingNotifications: typeof dispatchPendingNotifications
   cleanupRetention: typeof cleanupD1Retention
   randomUUID: () => string
+  now: () => number
 }
 
 export type DispatchDependencies = {
@@ -109,6 +110,7 @@ const defaultDependencies: SchedulerDependencies = {
   dispatchPendingNotifications,
   cleanupRetention: cleanupD1Retention,
   randomUUID: () => crypto.randomUUID(),
+  now: () => Date.now(),
 }
 
 function parseStoredPayload(row: StoredOutboxRow): StoredPayload {
@@ -579,13 +581,15 @@ export class Scheduler extends DurableObject<Env> {
 
   private async execute(scheduledAt: number): Promise<RunSummary> {
     const config = this.dependencies.resolveConfig(this.schedulerEnv)
-    const now = Math.floor(scheduledAt / 1000)
+    const nominalScheduledAt = Math.floor(scheduledAt / 1000)
+    const checkedAt = Math.floor(this.dependencies.now() / 1000)
     const runId = `${scheduledAt}:${this.dependencies.randomUUID()}`
     const output = await this.dependencies.runMonitoring(
       this.schedulerEnv,
       config,
-      now,
-      runId
+      checkedAt,
+      runId,
+      { scheduledAt: nominalScheduledAt }
     )
     await this.dependencies.persistRun(this.schedulerEnv, output)
     const notifications = await this.dependencies.dispatchPendingNotifications(
@@ -593,7 +597,7 @@ export class Scheduler extends DurableObject<Env> {
       20
     )
     try {
-      await this.dependencies.cleanupRetention(this.schedulerEnv, now)
+      await this.dependencies.cleanupRetention(this.schedulerEnv, checkedAt)
     } catch {
       logEvent('retention_cleanup_failed', {})
     }

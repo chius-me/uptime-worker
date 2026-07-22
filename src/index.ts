@@ -10,6 +10,7 @@ import { buildDataPayload, handleBadgeAPI, handleHealthAPI, stateUnavailableResp
 import { withSecurityHeaders } from './security'
 import type { ProbeStatus } from './probe'
 import { Scheduler } from './scheduler'
+import { resolvePasswordProtection } from './config'
 
 export interface Env {
   REMOTE_CHECKER_DO: DurableObjectNamespace<RemoteChecker>
@@ -41,7 +42,11 @@ export default {
       }))
     }
 
-    if (!isBasicAuthValid(request.headers.get('Authorization'), workerConfig.passwordProtection)) {
+    const passwordProtection = resolvePasswordProtection(
+      workerConfig.passwordProtection,
+      env as unknown as Record<string, unknown>
+    )
+    if (!isBasicAuthValid(request.headers.get('Authorization'), passwordProtection)) {
       return withSecurityHeaders(new Response(JSON.stringify({ code: 401, message: 'Not authenticated' }), {
         status: 401,
         headers: { 'WWW-Authenticate': 'Basic', 'Content-Type': 'application/json' },

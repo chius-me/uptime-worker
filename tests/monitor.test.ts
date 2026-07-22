@@ -32,6 +32,23 @@ describe('bounded monitor probes', () => {
     expect(socket.close).toHaveBeenCalledOnce()
   })
 
+  it('does not wait for TCP socket close cleanup that never settles', async () => {
+    vi.useFakeTimers()
+    const socket = {
+      opened: Promise.resolve(),
+      close: vi.fn(() => new Promise<never>(() => undefined)),
+    }
+
+    const pending = getStatus(tcpMonitor, { connect: () => socket })
+    const settled = vi.fn()
+    void pending.then(settled)
+    await vi.advanceTimersByTimeAsync(50)
+
+    expect(settled).toHaveBeenCalledOnce()
+    await expect(pending).resolves.toMatchObject({ up: true, publicMessage: 'OK' })
+    expect(socket.close).toHaveBeenCalledOnce()
+  })
+
   it('bounds HTTP keyword response reads and cancels the stream', async () => {
     const cancel = vi.fn(() => new Promise<never>(() => undefined))
     const reader = {
@@ -144,6 +161,70 @@ describe('bounded monitor probes', () => {
       location: 'ERROR',
       status: expect.objectContaining({ up: false, publicMessage: 'Connection failed' }),
     })
+  })
+
+  it('sends zero target headers to Globalping unless they are explicitly allowlisted', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'measurement-1' }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        status: 'finished',
+        results: [{
+          probe: { country: 'US', city: 'San Jose' },
+          result: { status: 'finished', timings: { total: 10 }, statusCode: 200, tls: { authorized: true } },
+        }],
+      }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await getStatusWithGlobalPing({
+      id: 'gp', name: 'GP', method: 'GET', target: 'https://service.example',
+      checkProxy: 'globalping://token', timeout: 100,
+      headers: { Authorization: 'Bearer private', 'X-Trace': 'trace-private-until-allowed' },
+    })
+
+    const outbound = JSON.parse(fetchMock.mock.calls[0][1]!.body as string)
+    expect(outbound.measurementOptions.request.headers).toEqual({})
+  })
+
+  it('forwards only case-insensitive Globalping header allowlist matches and blocks credential variants', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'measurement-1' }), { status: 202 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        status: 'finished',
+        results: [{
+          probe: { country: 'US', city: 'San Jose' },
+          result: { status: 'finished', timings: { total: 10 }, statusCode: 200, tls: { authorized: true } },
+        }],
+      }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await getStatusWithGlobalPing({
+      id: 'gp', name: 'GP', method: 'GET', target: 'https://service.example',
+      checkProxy: 'globalping://token', timeout: 100,
+      headers: {
+        'X-Trace': 123,
+        Unlisted: 'private',
+        Authorization: 'Bearer private',
+        COOKIE: 'session=private',
+        'Proxy-Authorization': 'Basic private',
+        'Set-Cookie': 'session=private',
+        'X-Api-Key': 'private',
+        'X-Auth-Token': 'private',
+        'X-API-Token': 'private',
+        'Authorization-Token': 'private',
+        'X-Secret': 'private',
+        'X-Credential': 'private',
+        'X-Password': 'private',
+        'X-Session-ID': 'private',
+      },
+      forwardHeaders: [
+        'x-trace', 'unmatched', 'authorization', 'cookie', 'proxy-authorization',
+        'set-cookie', 'x-api-key', 'x-auth-token', 'x-api-token',
+        'authorization-token', 'x-secret', 'x-credential', 'x-password', 'x-session-id',
+      ],
+    })
+
+    const outbound = JSON.parse(fetchMock.mock.calls[0][1]!.body as string)
+    expect(outbound.measurementOptions.request.headers).toEqual({ 'X-Trace': '123' })
   })
 
   it.each([1.5, 65_536])('rejects Globalping latency outside Uint16 storage bounds: %s', async (ping) => {

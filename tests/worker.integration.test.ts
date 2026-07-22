@@ -6,7 +6,10 @@ import { dispatchPendingNotifications } from '../src/scheduler'
 import { CompactedMonitorStateWrapper } from '../src/store'
 import { workerConfig } from '../uptime.config'
 
-type IntegrationEnv = Env & { TEST_MIGRATIONS: D1Migration[] }
+type IntegrationEnv = Env & {
+  TEST_MIGRATIONS: D1Migration[]
+  TEST_PASSWORD_PROTECTION: string
+}
 
 const testEnv = env as unknown as IntegrationEnv
 const configuredWorker = structuredClone(workerConfig)
@@ -59,6 +62,27 @@ describe('Worker runtime integration', () => {
 
     const authenticated = await SELF.fetch('https://example.test/index.html', {
       headers: { Authorization: `Basic ${btoa('member:secret')}` },
+    })
+    expect(authenticated.status).toBe(200)
+    expect(authenticated.headers.get('content-type')).toContain('text/html')
+  })
+
+  it('resolves only password protection from an environment-backed secret on page requests', async () => {
+    workerConfig.passwordProtection = 'member:<TEST_PASSWORD_PROTECTION>'
+    workerConfig.monitors = [{
+      id: 'unresolved-monitor-secret',
+      name: 'Unresolved monitor secret',
+      method: 'GET',
+      target: 'https://<MONITOR_HOST_THAT_MUST_NOT_RESOLVE_ON_FETCH>',
+    }]
+
+    const literalPlaceholder = await SELF.fetch('https://example.test/index.html', {
+      headers: { Authorization: `Basic ${btoa('member:<TEST_PASSWORD_PROTECTION>')}` },
+    })
+    expect(literalPlaceholder.status).toBe(401)
+
+    const authenticated = await SELF.fetch('https://example.test/index.html', {
+      headers: { Authorization: `Basic ${btoa(`member:${testEnv.TEST_PASSWORD_PROTECTION}`)}` },
     })
     expect(authenticated.status).toBe(200)
     expect(authenticated.headers.get('content-type')).toContain('text/html')

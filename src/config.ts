@@ -57,6 +57,24 @@ export function hasUsableWebhook(webhook: WebhookConfig | undefined): webhook is
   return webhook !== undefined && (!Array.isArray(webhook) || webhook.length > 0)
 }
 
+export function resolvePasswordProtection(
+  passwordProtection: string | undefined,
+  env: Record<string, unknown>
+): string | undefined {
+  if (passwordProtection === undefined) return undefined
+  const resolvedPassword = passwordProtection.replace(PLACEHOLDER, (_match, key: string) => {
+    const resolved = env[key]
+    if (typeof resolved !== 'string' || resolved.length === 0) {
+      throw new Error(`Invalid secret ${key} at passwordProtection`)
+    }
+    return resolved
+  })
+  if (/<[A-Z0-9_]+>/.test(resolvedPassword)) {
+    throw new Error('Unresolved nested secret at passwordProtection')
+  }
+  return resolvedPassword
+}
+
 export function validateAndResolveConfig(
   config: WorkerConfig,
   env: Record<string, unknown>

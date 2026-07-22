@@ -15,6 +15,7 @@ import {
   runMonitoring,
   type RunOutput,
 } from '../src/run-monitoring'
+import { CompactedMonitorStateWrapper } from '../src/store'
 
 const monitor = (id: string): MonitorTarget => ({
   id,
@@ -104,6 +105,51 @@ describe('runMonitoring', () => {
     })
     expect(JSON.stringify(output)).not.toContain('secret upstream diagnostic')
     expect(probe).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses actual check time for delayed results while retaining the nominal scheduled time', async () => {
+    const checkedAt = 200
+    const config: WorkerConfig = {
+      monitors: [monitor('api')],
+      notification: { webhook },
+    }
+
+    const output = await runMonitoring(readEnv(), config, checkedAt, '1000:uuid', {
+      scheduledAt: 1,
+      doMonitor: async () => ({
+        id: 'api',
+        location: 'SFO',
+        status: failedProbe('Connection: refused'),
+      }),
+      getWorkerLocation: async () => 'SFO',
+      nowMs: () => 200_250,
+    })
+    const expanded = new CompactedMonitorStateWrapper(JSON.stringify(output.state)).uncompact()
+
+    expect(output.summary).toMatchObject({
+      runId: '1000:uuid',
+      scheduledAt: 1,
+      completedAt: 200,
+    })
+    expect(output.state).toMatchObject({
+      lastUpdate: checkedAt,
+      lastRun: checkedAt,
+      monitoringStartedAt: { api: checkedAt },
+    })
+    expect(expanded.latency.api).toEqual([{ time: checkedAt, ping: 0, loc: 'SFO' }])
+    expect(output.state.incident.api).toMatchObject({
+      id: [`api:${checkedAt}`],
+      startedAt: [checkedAt],
+      changes: [[expect.objectContaining({ at: checkedAt })]],
+    })
+    expect(output.events).toEqual([expect.objectContaining({
+      eventKey: `api:${checkedAt}:down`,
+      payload: expect.objectContaining({ startedAt: checkedAt, checkedAt }),
+    })])
+    expect(output.callbacks).toEqual([
+      expect.objectContaining({ type: 'status-change', startedAt: checkedAt, checkedAt }),
+      expect.objectContaining({ type: 'incident', startedAt: checkedAt, checkedAt }),
+    ])
   })
 
   it('limits probe concurrency to five', async () => {

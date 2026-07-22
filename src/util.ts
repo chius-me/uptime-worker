@@ -108,6 +108,7 @@ async function webhookNotify(
   const startTime = Date.now()
   let method = webhook.method ?? 'UNKNOWN'
   let status: number | null = null
+  let response: Response | undefined
   try {
     let url = webhook.url
 
@@ -147,8 +148,8 @@ async function webhookNotify(
         throw 'Unrecognized payload type: ' + webhook.payloadType
     }
 
-    const resp = await fetchTimeout(url, webhook.timeout ?? 5000, { method, headers, body })
-    status = resp.status
+    response = await fetchTimeout(url, webhook.timeout ?? 5000, { method, headers, body })
+    status = response.status
 
     logEvent('webhook_response', {
       host,
@@ -156,7 +157,7 @@ async function webhookNotify(
       status,
       duration: Date.now() - startTime,
     })
-    if (!resp.ok) {
+    if (!response.ok) {
       throw new Error('Webhook request failed')
     }
   } catch {
@@ -169,6 +170,12 @@ async function webhookNotify(
       })
     }
     throw new Error('Webhook request failed')
+  } finally {
+    try {
+      void response?.body?.cancel().catch(() => undefined)
+    } catch {
+      // Response cleanup must not replace delivery success or failure.
+    }
   }
 }
 

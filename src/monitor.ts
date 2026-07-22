@@ -43,6 +43,29 @@ type CheckFailure = { internalError: string }
 
 const DEFAULT_TIMEOUT = 10_000
 
+function isCredentialHeader(header: string): boolean {
+  const compact = header.toLowerCase().replace(/[^a-z0-9]/g, '')
+  return [
+    'authorization',
+    'cookie',
+    'apikey',
+    'token',
+    'secret',
+    'credential',
+    'password',
+    'session',
+  ].some((credential) => compact.includes(credential))
+}
+
+function globalPingHeaders(monitor: MonitorTarget): Record<string, string> {
+  const allowed = new Set((monitor.forwardHeaders ?? []).map((header) => header.toLowerCase()))
+  return Object.fromEntries(
+    Object.entries(monitor.headers ?? {})
+      .filter(([header]) => allowed.has(header.toLowerCase()) && !isCredentialHeader(header))
+      .map(([header, value]) => [header, String(value)])
+  )
+}
+
 function isIpAddress(hostname: string): boolean {
   if (hostname.includes(':')) return true
   const parts = hostname.split('.')
@@ -200,9 +223,7 @@ export async function getStatusWithGlobalPing(
             method: monitor.method,
             path: targetUrl.pathname,
             query: targetUrl.search || undefined,
-            headers: Object.fromEntries(
-              Object.entries(monitor.headers ?? {}).map(([key, value]) => [key, String(value)])
-            ),
+            headers: globalPingHeaders(monitor),
           },
           port: targetUrl.port || (targetUrl.protocol === 'http:' ? 80 : 443),
           protocol: targetUrl.protocol.slice(0, -1),
@@ -330,7 +351,11 @@ export async function getStatus(
         timedOut ? timeout : 0
       )
     } finally {
-      await socket?.close().catch(() => undefined)
+      try {
+        void socket?.close().catch(() => undefined)
+      } catch {
+        // Socket cleanup must not delay or replace the probe result.
+      }
     }
   }
 
