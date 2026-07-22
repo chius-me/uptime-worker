@@ -45,11 +45,22 @@ describe('accessible status UI', () => {
 
   it('provides a labelled canvas and screen-reader chart summary', async () => {
     const { renderMonitor } = await loadRenderers()
-    const html = renderMonitor({ id: 'api', name: 'API' }, { up: true }, {})
+    const html = renderMonitor({ id: 'api', name: 'API' }, { up: true }, {
+      latency: {
+        api: [
+          { time: 100, ping: 250 },
+          { time: 200, ping: 80 },
+          { time: 300, ping: 120 },
+        ],
+      },
+    })
 
     expect(html).toContain('role="img"')
     expect(html).toContain('aria-label="Response times')
     expect(html).toContain('chart-summary-api')
+    expect(html).toContain('Minimum: 80 ms')
+    expect(html).toContain('Maximum: 250 ms')
+    expect(html).toContain('Latest: 120 ms')
   })
 
   it('keeps keyboard focus indicators, focusable status bars, and reduced-motion support', async () => {

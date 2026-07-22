@@ -13,6 +13,7 @@ type IncidentView = {
 
 type IncidentRenderers = {
   startOfLocalDaySeconds?: (date: Date) => number
+  localDayWindowSeconds?: (date: Date) => { start: number; end: number }
   buildIncidentTimeline?: (state: unknown, monitors: Array<{ id: string; name: string }>, nowSeconds?: number) => IncidentView[]
 }
 
@@ -30,6 +31,7 @@ async function loadIncidentRenderers(): Promise<IncidentRenderers> {
 
   return new Function('window', 'document', 'localStorage', 'I18N', `${app}\nreturn {
     startOfLocalDaySeconds: typeof startOfLocalDaySeconds === 'function' ? startOfLocalDaySeconds : undefined,
+    localDayWindowSeconds: typeof localDayWindowSeconds === 'function' ? localDayWindowSeconds : undefined,
     buildIncidentTimeline: typeof buildIncidentTimeline === 'function' ? buildIncidentTimeline : undefined,
   }`)(window, document, localStorage, I18N) as IncidentRenderers
 }
@@ -44,38 +46,69 @@ describe('incident history', () => {
     )
   })
 
+  it('uses the adjacent local midnight as the DST-safe day end', async () => {
+    const { localDayWindowSeconds } = await loadIncidentRenderers()
+    const originalTimeZone = process.env.TZ
+    process.env.TZ = 'America/Los_Angeles'
+
+    try {
+      const window = localDayWindowSeconds?.(new Date(2026, 2, 8, 12))
+
+      expect(localDayWindowSeconds).toBeTypeOf('function')
+      expect(window).toEqual({
+        start: new Date(2026, 2, 8, 0, 0, 0, 0).getTime() / 1000,
+        end: new Date(2026, 2, 9, 0, 0, 0, 0).getTime() / 1000,
+      })
+      expect(window!.end - window!.start).toBe(23 * 60 * 60)
+    } finally {
+      process.env.TZ = originalTimeZone
+    }
+  })
+
   it('merges public incidents for configured monitors into a newest-first timeline', async () => {
     const { buildIncidentTimeline } = await loadIncidentRenderers()
     const state = {
       incident: {
-        api: [{
-          id: 'api:100',
-          startedAt: 100,
-          resolvedAt: 220,
-          changes: [{ at: 100, publicMessage: 'Connection failed' }],
-          start: [100],
-          end: 220,
-          error: ['Connection failed'],
-        }],
-        removed: [{
-          id: 'removed:300',
+        api: [
+          {
+            id: 'api:100',
+            startedAt: 100,
+            resolvedAt: 220,
+            changes: [{ at: 100, publicMessage: 'Connection failed' }],
+            start: [100],
+            end: 220,
+            error: ['Connection failed'],
+          },
+          {
+            id: 'api:200',
+            startedAt: 200,
+            resolvedAt: 240,
+            changes: [{ at: 200, publicMessage: 'Timeout' }],
+          },
+        ],
+        web: [{
+          id: 'web:300',
           startedAt: 300,
           resolvedAt: null,
-          changes: [{ at: 300, publicMessage: 'Timeout' }],
+          changes: [{ at: 300, publicMessage: 'TLS validation failed' }],
         }],
       },
     }
 
     expect(buildIncidentTimeline).toBeTypeOf('function')
-    expect(buildIncidentTimeline!(state, [{ id: 'api', name: 'API' }], 500)).toEqual([
-      expect.objectContaining({
-        monitorId: 'api',
-        monitorName: 'API',
-        ongoing: false,
-        durationSeconds: 120,
-        publicMessage: 'Connection failed',
-      }),
-    ])
+    const timeline = buildIncidentTimeline!(state, [
+      { id: 'api', name: 'API' },
+      { id: 'web', name: 'Web' },
+    ], 500)
+
+    expect(timeline.map(incident => incident.id)).toEqual(['web:300', 'api:200', 'api:100'])
+    expect(timeline[2]).toMatchObject({
+      monitorId: 'api',
+      monitorName: 'API',
+      ongoing: false,
+      durationSeconds: 120,
+      publicMessage: 'Connection failed',
+    })
   })
 
   it('marks unresolved incidents as ongoing and excludes the migrated v1 monitoring dummy', async () => {

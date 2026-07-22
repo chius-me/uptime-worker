@@ -268,7 +268,13 @@ function renderMonitor(mon, monData, state) {
 
 // ── Uptime Bars (90 days) ────────────────────────
 function startOfLocalDaySeconds(date = new Date()) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime() / 1000
+  return localDayWindowSeconds(date).start
+}
+
+function localDayWindowSeconds(date = new Date()) {
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate())
+  const end = new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1)
+  return { start: start.getTime() / 1000, end: end.getTime() / 1000 }
 }
 
 function incidentStart(incident) {
@@ -314,8 +320,9 @@ function drawBars(monId, state) {
 
   container.innerHTML = '' // Clear existing
   for (let i = 89; i >= 0; i--) {
-    const dayStart = startOfLocalDaySeconds(new Date(today.getFullYear(), today.getMonth(), today.getDate() - i))
-    const dayEnd = startOfLocalDaySeconds(new Date(today.getFullYear(), today.getMonth(), today.getDate() - i + 1))
+    const { start: dayStart, end: dayEnd } = localDayWindowSeconds(
+      new Date(today.getFullYear(), today.getMonth(), today.getDate() - i)
+    )
     let dayDown = 0
 
     for (const inc of incidents) {
