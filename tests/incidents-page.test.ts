@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { readFile } from 'node:fs/promises'
 
 type IncidentView = {
+  id: string
   monitorId: string
   monitorName: string
   startedAt: number
@@ -10,6 +11,8 @@ type IncidentView = {
   durationSeconds: number
   publicMessage: string
 }
+
+const nodeProcess = (globalThis as unknown as { process: { env: Record<string, string | undefined> } }).process
 
 type IncidentRenderers = {
   startOfLocalDaySeconds?: (date: Date) => number
@@ -48,8 +51,8 @@ describe('incident history', () => {
 
   it('uses the adjacent local midnight as the DST-safe day end', async () => {
     const { localDayWindowSeconds } = await loadIncidentRenderers()
-    const originalTimeZone = process.env.TZ
-    process.env.TZ = 'America/Los_Angeles'
+    const originalTimeZone = nodeProcess.env.TZ
+    nodeProcess.env.TZ = 'America/Los_Angeles'
 
     try {
       const window = localDayWindowSeconds?.(new Date(2026, 2, 8, 12))
@@ -61,7 +64,8 @@ describe('incident history', () => {
       })
       expect(window!.end - window!.start).toBe(23 * 60 * 60)
     } finally {
-      process.env.TZ = originalTimeZone
+      if (originalTimeZone === undefined) delete nodeProcess.env.TZ
+      else nodeProcess.env.TZ = originalTimeZone
     }
   })
 
