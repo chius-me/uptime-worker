@@ -2,11 +2,11 @@ import { MaintenanceConfig, PageConfig, WorkerConfig } from './types/config'
 
 const pageConfig: PageConfig = {
   // Title for your status page
-  title: 'Service status',
+  title: "Chius's Status Page",
   // Links shown at the header of your status page, could set `highlight` to `true`
   links: [
-    { link: 'https://example.com', label: 'Homepage' },
-    { link: 'mailto:ops@example.com', label: 'Contact operations', highlight: true },
+    { link: 'https://github.com/chius-me/', label: 'GitHub' },
+    { link: 'mailto:contact@chius.cc', label: 'Email Me', highlight: true },
   ],
   logo: '/logo.png',
 }
@@ -18,27 +18,27 @@ const workerConfig: WorkerConfig = {
       id: 'blog',
       name: 'Blog',
       method: 'GET',
-      target: 'https://service.example',
-      tooltip: 'Public service',
-      statusPageLink: 'https://service.example',
+      target: 'https://chius.cc',
+      tooltip: 'Personal blog',
+      statusPageLink: 'https://chius.cc',
       expectedCodes: [200],
       timeout: 10000,
     },
     {
       id: 'homelab',
-      name: 'Private service',
+      name: 'HomeLab',
       method: 'TCP_PING',
       target: '<HOMELAB_HOST>:<HOMELAB_PORT>',
-      tooltip: 'Private connectivity',
+      tooltip: 'HomeLab IPv6 connectivity',
       timeout: 10000,
     },
     {
       id: 'vps1',
-      name: 'Remote TCP service',
+      name: 'VPS in Qingdao',
       method: 'TCP_PING',
       // 通过 CF Secrets 传入环境变量 <VPS1_IP> 和 <VPS1_PORT>
       target: '<VPS1_IP>:<VPS1_PORT>',
-      tooltip: 'TCP availability',
+      tooltip: 'From Aliyun',
       timeout: 5000,
     },
     // Custom proxies must be explicitly allowlisted. The Worker sends only a
