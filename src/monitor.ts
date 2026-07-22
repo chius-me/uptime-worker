@@ -1,6 +1,7 @@
-import { Env } from './index'
+import type { Env } from './index'
 import { MonitorTarget } from '../types/config'
 import { withTimeout, fetchTimeout } from './util'
+import { logEvent } from './log'
 
 interface GlobalPingMeasurementResponse {
   id: string
@@ -66,11 +67,6 @@ async function httpResponseBasicCheck(
 
     // MUST contain responseKeyword
     if (monitor.responseKeyword && !responseBody.includes(monitor.responseKeyword)) {
-      console.log(
-        `${monitor.name} expected keyword ${
-          monitor.responseKeyword
-        }, not found in response (truncated to 100 chars): ${responseBody.slice(0, 100)}`
-      )
       return "HTTP response doesn't contain the configured keyword"
     }
 
@@ -79,11 +75,6 @@ async function httpResponseBasicCheck(
       monitor.responseForbiddenKeyword &&
       responseBody.includes(monitor.responseForbiddenKeyword)
     ) {
-      console.log(
-        `${monitor.name} forbidden keyword ${
-          monitor.responseForbiddenKeyword
-        }, found in response (truncated to 100 chars): ${responseBody.slice(0, 100)}`
-      )
       return 'HTTP response contains the configured forbidden keyword'
     }
   }
@@ -171,7 +162,6 @@ export async function getStatusWithGlobalPing(
     }
 
     const startTime = Date.now()
-    console.log(`Requesting the Global Ping API, payload: ${JSON.stringify(globalPingRequest)}`)
     const measurement = await fetchTimeout('https://api.globalping.io/v1/measurements', 5000, {
       method: 'POST',
       headers: {
@@ -187,11 +177,7 @@ export async function getStatusWithGlobalPing(
     }
 
     const measurementId = measurementResponse.id
-    console.log(
-      `Measurement created successfully, id: ${measurementId}, time elapsed: ${
-        Date.now() - startTime
-      }ms`
-    )
+    logEvent('globalping_measurement_created', { duration: Date.now() - startTime })
 
     const pollStart = Date.now()
     let measurementResult: GlobalPingResult
@@ -211,23 +197,13 @@ export async function getStatusWithGlobalPing(
       await new Promise((resolve) => setTimeout(resolve, 1000))
     }
 
-    console.log(
-      `Measurement ${measurementId} finished with response: ${JSON.stringify(
-        measurementResult
-      )}, time elapsed: ${Date.now() - pollStart}ms`
-    )
+    logEvent('globalping_measurement_finished', { duration: Date.now() - pollStart })
 
     if (
       measurementResult.status !== 'finished' ||
       measurementResult.results[0].result.status !== 'finished'
     ) {
-      console.log(
-        `measurement failed with status: ${measurementResult.status}, result status: ${measurementResult.results[0].result.status}`
-      )
-      // Truncate raw output to avoid huge error messages
-      throw `status [${measurementResult.status}|${
-        measurementResult.results[0].result.status
-      }]: ${measurementResult.results?.[0].result?.rawOutput?.slice(0, 64)}`
+      throw new Error('Globalping measurement failed')
     }
 
     const country = measurementResult.results[0].probe.country
@@ -250,17 +226,15 @@ export async function getStatusWithGlobalPing(
 
       let err = await httpResponseBasicCheck(monitor, code, async () => body)
       if (err !== null) {
-        console.log(`${monitor.name} didn't pass response check: ${err}`)
+        logEvent('response_check_failed', { monitorId: monitor.id })
       }
 
       if (
         monitor.target.toLowerCase().startsWith('https') &&
         !measurementResult.results[0].result.tls?.authorized
       ) {
-        console.log(
-          `${monitor.name} TLS certificate not trusted: ${measurementResult.results[0].result.tls?.error}`
-        )
-        err = 'TLS certificate not trusted: ' + (measurementResult.results[0].result.tls?.error ?? 'unknown')
+        logEvent('tls_certificate_untrusted', { monitorId: monitor.id })
+        err = 'TLS certificate not trusted'
       }
 
       return {
@@ -273,13 +247,13 @@ export async function getStatusWithGlobalPing(
       }
     }
   } catch (e: any) {
-    console.log(`Globalping ${monitor.name} errored with ${e}`)
+    logEvent('globalping_request_failed', { monitorId: monitor.id })
     return {
       location: 'ERROR',
       status: {
         ping: e.toString().toLowerCase().includes('timeout') ? monitor.timeout ?? 10000 : 0,
         up: false,
-        err: 'Globalping error: ' + e.toString(),
+        err: 'Globalping error',
       },
     }
   }
@@ -310,18 +284,18 @@ export async function getStatus(
       await withTimeout(monitor.timeout || 10000, socket.opened)
       await socket.close()
 
-      console.log(`${monitor.name} connected to ${monitor.target}`)
+      logEvent('tcp_connection_succeeded', { monitorId: monitor.id })
 
       status.ping = Date.now() - startTime
       status.up = true
       status.err = ''
     } catch (e: Error | any) {
-      console.log(`${monitor.name} errored with ${e.name}: ${e.message}`)
+      logEvent('tcp_connection_failed', { monitorId: monitor.id })
       if (e.message.includes('timed out')) {
         status.ping = monitor.timeout || 10000
       }
       status.up = false
-      status.err = e.name + ': ' + e.message
+      status.err = 'TCP connection error'
     }
   } else {
     // HTTP endpoint monitor
@@ -342,7 +316,7 @@ export async function getStatus(
         },
       })
 
-      console.log(`${monitor.name} responded with ${response.status}`)
+      logEvent('http_response_received', { monitorId: monitor.id, status: response.status })
       status.ping = Date.now() - startTime
 
       const err = await httpResponseBasicCheck(
@@ -355,19 +329,19 @@ export async function getStatus(
       } catch (e) {} // Always try to cancel body, see issue #166
 
       if (err !== null) {
-        console.log(`${monitor.name} didn't pass response check: ${err}`)
+        logEvent('response_check_failed', { monitorId: monitor.id })
       }
       status.up = err === null
       status.err = err ?? ''
     } catch (e: any) {
-      console.log(`${monitor.name} errored with ${e.name}: ${e.message}`)
+      logEvent('http_request_failed', { monitorId: monitor.id })
       if (e.name === 'AbortError') {
         status.ping = monitor.timeout || 10000
         status.up = false
         status.err = `Timeout after ${status.ping}ms`
       } else {
         status.up = false
-        status.err = e.name + ': ' + e.message
+        status.err = 'HTTP request error'
       }
     }
   }
@@ -382,7 +356,7 @@ export async function doMonitor(monitor: MonitorTarget, defaultLocation: string,
   if (monitor.checkProxy) {
     // Initiate a check using proxy (Geo-specific monitoring)
     try {
-      console.log(`[${monitor.id}] Calling check proxy: ${monitor.checkProxy}`)
+      logEvent('proxy_check_started', { monitorId: monitor.id })
       let resp
       if (monitor.checkProxy.startsWith('worker://')) {
         const doLoc = monitor.checkProxy.replace('worker://', '')
@@ -410,10 +384,10 @@ export async function doMonitor(monitor: MonitorTarget, defaultLocation: string,
       }
       checkLocation = resp.location
       status = resp.status
-    } catch (err) {
-      console.log(`[${monitor.id}] Error calling proxy: ${err}`)
+    } catch {
+      logEvent('proxy_check_failed', { monitorId: monitor.id })
       if (monitor.checkProxyFallback) {
-        console.log('Falling back to local check...')
+        logEvent('proxy_check_fallback', { monitorId: monitor.id })
         status = await getStatus(monitor)
       } else {
         // TODO: more consistent error handling (throw or return?)
@@ -425,7 +399,7 @@ export async function doMonitor(monitor: MonitorTarget, defaultLocation: string,
     status = await getStatus(monitor)
   }
 
-  console.log(`[${monitor.id}] Check result from ${checkLocation}: up=${status.up}, ping=${status.ping}, err=${status.err}`)
+  logEvent('monitor_check_result', { monitorId: monitor.id, up: status.up, ping: status.ping })
 
   return {
     location: checkLocation,

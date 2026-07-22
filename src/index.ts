@@ -2,7 +2,9 @@ import { DurableObject } from 'cloudflare:workers'
 import { MonitorTarget } from '../types/config'
 import { workerConfig, maintenances, pageConfig } from '../uptime.config'
 import { doMonitor, getStatus } from './monitor'
-import { formatAndNotify, getWorkerLocation, resolveEnvVars } from './util'
+import { formatAndNotify, getWorkerLocation } from './util'
+import { validateAndResolveConfig } from './config'
+import { logEvent } from './log'
 import { CompactedMonitorStateWrapper, getFromStore, setToStore } from './store'
 import { isBasicAuthValid } from './auth'
 import pLimit from 'p-limit'
@@ -61,6 +63,8 @@ export default {
 
   // ── 定时任务（每分钟跑一次监控）──
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext): Promise<void> {
+    const envWithDefaults = { ...env, VPS1_PORT: env.VPS1_PORT || '22' } as Env & Record<string, unknown>
+    const config = validateAndResolveConfig(workerConfig, envWithDefaults)
     const workerLocation = (await getWorkerLocation()) || 'ERROR'
     console.log(`Running scheduled event on ${workerLocation}...`)
 
@@ -78,9 +82,7 @@ export default {
     let checkQueue: Promise<CheckResult>[] = []
     let checkResult: Record<string, CheckResult> = {};
     const limit = pLimit(5);
-    const envWithDefaults = { ...env, VPS1_PORT: env.VPS1_PORT || '22' } as Env
-    for (const rawMonitor of workerConfig.monitors) {
-      const monitor = { ...rawMonitor, target: resolveEnvVars(rawMonitor.target, envWithDefaults) }
+    for (const monitor of config.monitors) {
       checkQueue.push(limit(() => doMonitor(monitor, workerLocation, env)))
     }
     for (const result of await Promise.all(checkQueue)) {
@@ -88,9 +90,9 @@ export default {
     }
 
     // Update each monitor's state based on check results
-    for (const monitor of workerConfig.monitors) {
+    for (const monitor of config.monitors) {
       try {
-      console.log(`Processing monitor result: ${monitor.name} (${monitor.id})`)
+      logEvent('monitor_result_processing', { monitorId: monitor.id })
 
       let monitorStatusChanged = false
       const { location: checkLocation, status } = checkResult[monitor.id]
@@ -123,20 +125,18 @@ export default {
           try {
             if (
               // grace period not set OR ...
-              workerConfig.notification?.gracePeriod === undefined ||
+              config.notification?.gracePeriod === undefined ||
               // only when we have sent a notification for DOWN status, we will send a notification for UP status (within 30 seconds of possible drift)
               currentTimeSecond - lastIncident.start[0] >=
-                (workerConfig.notification.gracePeriod + 1) * 60 - 30
+                (config.notification.gracePeriod + 1) * 60 - 30
             ) {
-              await formatAndNotify(env, monitor, true, lastIncident.start[0], currentTimeSecond, 'OK')
+              await formatAndNotify(env, config, monitor, true, lastIncident.start[0], currentTimeSecond, 'OK')
             } else {
-              console.log(
-                `grace period (${workerConfig.notification?.gracePeriod}m) not met, skipping webhook UP notification for ${monitor.name}`
-              )
+              logEvent('notification_skipped', { monitorId: monitor.id, reason: 'grace_period' })
             }
 
             console.log('Calling config onStatusChange callback...')
-            await workerConfig.callbacks?.onStatusChange?.(
+            await config.callbacks?.onStatusChange?.(
               env,
               monitor,
               true,
@@ -144,9 +144,8 @@ export default {
               currentTimeSecond,
               'OK'
             )
-          } catch (e) {
-            console.log('Error calling callback: ')
-            console.log(e)
+          } catch {
+            logEvent('callback_failed', { type: 'on_status_change' })
           }
         }
       } else {
@@ -175,21 +174,21 @@ export default {
             // monitor status changed AND...
             (monitorStatusChanged &&
               // grace period not set OR ...
-              (workerConfig.notification?.gracePeriod === undefined ||
+              (config.notification?.gracePeriod === undefined ||
                 // have sent a notification for DOWN status
                 currentTimeSecond - currentIncident.start[0] >=
-                  (workerConfig.notification.gracePeriod + 1) * 60 - 30)) ||
+                  (config.notification.gracePeriod + 1) * 60 - 30)) ||
             // grace period is set AND...
-            (workerConfig.notification?.gracePeriod !== undefined &&
+            (config.notification?.gracePeriod !== undefined &&
               // grace period is met
               currentTimeSecond - currentIncident.start[0] >=
-                workerConfig.notification.gracePeriod * 60 - 30 &&
+                config.notification.gracePeriod * 60 - 30 &&
               currentTimeSecond - currentIncident.start[0] <
-                workerConfig.notification.gracePeriod * 60 + 30)
+                config.notification.gracePeriod * 60 + 30)
           ) {
             if (
               currentIncident.start[0] !== currentTimeSecond &&
-              workerConfig.notification?.skipErrorChangeNotification
+              config.notification?.skipErrorChangeNotification
             ) {
               console.log(
                 'Skipping notification for following error reason change due to user config'
@@ -197,6 +196,7 @@ export default {
             } else {
               await formatAndNotify(
                 env,
+                config,
                 monitor,
                 false,
                 currentIncident.start[0],
@@ -205,19 +205,12 @@ export default {
               )
             }
           } else {
-            console.log(
-              `Grace period (${workerConfig.notification
-                ?.gracePeriod}m) not met or no change (currently down for ${
-                currentTimeSecond - currentIncident.start[0]
-              }s, changed ${monitorStatusChanged}), skipping webhook DOWN notification for ${
-                monitor.name
-              }`
-            )
+            logEvent('notification_skipped', { monitorId: monitor.id, reason: 'grace_period' })
           }
 
           if (monitorStatusChanged) {
             console.log('Calling config onStatusChange callback...')
-            await workerConfig.callbacks?.onStatusChange?.(
+            await config.callbacks?.onStatusChange?.(
               env,
               monitor,
               false,
@@ -226,23 +219,21 @@ export default {
               status.err
             )
           }
-        } catch (e) {
-          console.log('Error calling callback: ')
-          console.log(e)
+        } catch {
+          logEvent('callback_failed', { type: 'on_status_change' })
         }
 
         try {
           console.log('Calling config onIncident callback...')
-          await workerConfig.callbacks?.onIncident?.(
+          await config.callbacks?.onIncident?.(
             env,
             monitor,
             currentIncident.start[0],
             currentTimeSecond,
             status.err
           )
-        } catch (e) {
-          console.log('Error calling callback: ')
-          console.log(e)
+        } catch {
+          logEvent('callback_failed', { type: 'on_incident' })
         }
       }
 
@@ -281,8 +272,8 @@ export default {
       }
 
       statusChanged ||= monitorStatusChanged
-      } catch (e) {
-        console.error(`Error processing monitor ${monitor.id}:`, e)
+      } catch {
+        logEvent('monitor_processing_failed', { monitorId: monitor.id })
         continue
       }
     }
@@ -295,7 +286,7 @@ export default {
     if (
       statusChanged ||
       currentTimeSecond - state.data.lastUpdate >=
-        (workerConfig.kvWriteCooldownMinutes ?? 3) * 60 - 10 // Allow for 10 seconds of clock drift
+        (config.kvWriteCooldownMinutes ?? 3) * 60 - 10 // Allow for 10 seconds of clock drift
     ) {
       console.log('Updating state...')
       state.data.lastUpdate = currentTimeSecond
