@@ -188,7 +188,7 @@ export function buildDataPayload(
   page: PageConfig,
   now: number
 ): DataPayload {
-  const { stale, monitoringStatus } = getMonitoringStatus(state.lastUpdate, now)
+  const { stale, monitoringStatus: storedMonitoringStatus } = getMonitoringStatus(state.lastUpdate, now)
   const configuredIds = new Set(monitorsConfig.map(({ id }) => id))
   const monitorById = new Map(monitorsConfig.map((monitor) => [monitor.id, monitor]))
   const legacyMonitoringStartedAt = Object.fromEntries(
@@ -204,6 +204,12 @@ export function buildDataPayload(
   const monitors = Object.fromEntries(
     monitorsConfig.map((monitor) => [monitor.id, summaryForMonitor(state, monitor, stale)])
   )
+  const monitorSummaries = Object.values(monitors)
+  const up = monitorSummaries.filter((summary) => summary.up === true).length
+  const down = monitorSummaries.filter((summary) => summary.up === false).length
+  const monitoringStatus = storedMonitoringStatus === 'healthy' && monitorSummaries.some((summary) => summary.up === null)
+    ? 'initializing'
+    : storedMonitoringStatus
   const incident = Object.fromEntries(
     Object.entries(state.incident)
       .filter(([id]) => configuredIds.has(id))
@@ -228,8 +234,8 @@ export function buildDataPayload(
 
   return {
     schemaVersion: 2,
-    up: state.overallUp,
-    down: state.overallDown,
+    up,
+    down,
     updatedAt: state.lastUpdate,
     stale,
     monitoringStatus,

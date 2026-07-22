@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
@@ -19,9 +19,10 @@ type IncidentRenderers = {
   startOfLocalDaySeconds?: (date: Date) => number
   localDayWindowSeconds?: (date: Date) => { start: number; end: number }
   buildIncidentTimeline?: (state: unknown, monitors: Array<{ id: string; name: string }>, nowSeconds?: number) => IncidentView[]
+  renderIncident?: (incident: IncidentView) => string
 }
 
-async function loadIncidentRenderers(): Promise<IncidentRenderers> {
+async function loadIncidentRenderers(t: (text: string) => string = (text) => text): Promise<IncidentRenderers> {
   const app = await readFile(fileURLToPath(String(new URL('../static/js/app.js', import.meta.url))), 'utf8')
   const window = { addEventListener() {}, location: { hash: '' }, UW: {} }
   const document = {
@@ -31,16 +32,37 @@ async function loadIncidentRenderers(): Promise<IncidentRenderers> {
     querySelector() { return null },
   }
   const localStorage = { getItem() { return null }, setItem() {} }
-  const I18N = { init: async () => {}, t: (text: string) => text }
+  const I18N = { init: async () => {}, t }
 
   return new Function('window', 'document', 'localStorage', 'I18N', `${app}\nreturn {
     startOfLocalDaySeconds: typeof startOfLocalDaySeconds === 'function' ? startOfLocalDaySeconds : undefined,
     localDayWindowSeconds: typeof localDayWindowSeconds === 'function' ? localDayWindowSeconds : undefined,
     buildIncidentTimeline: typeof buildIncidentTimeline === 'function' ? buildIncidentTimeline : undefined,
+    renderIncident: typeof renderIncident === 'function' ? renderIncident : undefined,
   }`)(window, document, localStorage, I18N) as IncidentRenderers
 }
 
 describe('incident history', () => {
+  it('provides localized fixed public incident categories in every supported locale', async () => {
+    const localeFiles = ['en', 'zh-CN', 'zh-TW', 'de-DE', 'fr-FR']
+    const categories = [
+      'Not checked yet',
+      'OK',
+      'Timeout',
+      'Unexpected status code',
+      'TLS validation failed',
+      'Content check failed',
+      'Content check inconclusive',
+      'Connection failed',
+    ]
+
+    await Promise.all(localeFiles.map(async (locale) => {
+      const content = await readFile(fileURLToPath(String(new URL(`../static/locales/${locale}/common.json`, import.meta.url))), 'utf8')
+      const translations = JSON.parse(content) as Record<string, string>
+      categories.forEach((category) => expect(translations[category]).toBeTypeOf('string'))
+    }))
+  })
+
   it('uses local midnight for status-day boundaries', async () => {
     const { startOfLocalDaySeconds } = await loadIncidentRenderers()
 
@@ -139,5 +161,29 @@ describe('incident history', () => {
     expect(buildIncidentTimeline!(state, [{ id: 'api', name: 'API' }], 460)).toEqual([
       expect.objectContaining({ ongoing: true, durationSeconds: 60, publicMessage: 'Request timed out' }),
     ])
+  })
+
+  it('localizes only allowlisted categories and keeps fallback incident output escaped', async () => {
+    const t = vi.fn((text: string) => text === 'Timeout' ? 'Zeitüberschreitung' : text)
+    const { renderIncident } = await loadIncidentRenderers(t)
+    const incident = {
+      id: 'api:100',
+      monitorId: 'api',
+      monitorName: 'API',
+      startedAt: 100,
+      resolvedAt: 110,
+      ongoing: false,
+      durationSeconds: 10,
+      publicMessage: 'Timeout',
+    }
+
+    expect(renderIncident).toBeTypeOf('function')
+    expect(renderIncident!(incident)).toContain('Zeitüberschreitung')
+
+    const unsafeCategory = '<img src=x onerror=alert(1)>'
+    const unsafeHtml = renderIncident!({ ...incident, publicMessage: unsafeCategory })
+    expect(unsafeHtml).toContain('&lt;img src=x onerror=alert(1)&gt;')
+    expect(unsafeHtml).not.toContain('<img src=x')
+    expect(t).not.toHaveBeenCalledWith(unsafeCategory)
   })
 })

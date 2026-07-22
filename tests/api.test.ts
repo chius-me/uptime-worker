@@ -80,6 +80,46 @@ describe('public status API contracts', () => {
     })
   })
 
+  it('derives public totals from configured monitor summaries instead of stored counters', () => {
+    const payload = buildDataPayload(
+      {
+        ...emptyState,
+        lastUpdate: 1_000,
+        overallUp: 8,
+        overallDown: 3,
+        latency: { api: [{ time: 1_000, ping: 42, loc: 'SFO' }] },
+      },
+      [monitor('api')],
+      page,
+      1_010
+    )
+
+    expect(payload).toMatchObject({ up: 1, down: 0, monitoringStatus: 'healthy' })
+  })
+
+  it('makes the overall status initializing when any configured monitor is unknown', () => {
+    const payload = buildDataPayload(
+      {
+        ...emptyState,
+        lastUpdate: 1_000,
+        overallUp: 2,
+        latency: { api: [{ time: 1_000, ping: 42, loc: 'SFO' }] },
+      },
+      [monitor('api'), monitor('new')],
+      page,
+      1_010
+    )
+
+    expect(payload).toMatchObject({
+      up: 1,
+      down: 0,
+      stale: false,
+      monitoringStatus: 'initializing',
+    })
+    expect(payload.monitors.api.up).toBe(true)
+    expect(payload.monitors.new.up).toBeNull()
+  })
+
   it('marks data stale after 180 seconds and makes every monitor unknown', () => {
     const payload = buildDataPayload(stateAt(1_000), [monitor('api')], page, 1_181)
 
