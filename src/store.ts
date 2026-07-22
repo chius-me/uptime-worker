@@ -157,6 +157,14 @@ function legacyIncident(incident: IncidentRecordV2): IncidentRecord {
   }
 }
 
+export function isLegacyDummyIncident(incident: IncidentRecord): boolean {
+  return incident.start.length === 1 &&
+    incident.error.length === 1 &&
+    incident.error[0] === 'dummy' &&
+    incident.end !== null &&
+    incident.end === incident.start[0]
+}
+
 function incidentFromLegacy(monitorId: string, incident: IncidentRecord): IncidentRecordV2 {
   if (incident.start.length === 0 || incident.start.length !== incident.error.length) {
     corrupt(`Inconsistent incident changes for ${monitorId}`)
@@ -351,8 +359,7 @@ function migrateV1(value: UnknownRecord): MonitorStateCompactedV2 {
 
     const columns = emptyIncidentColumns()
     for (const row of rows) {
-      if (row.error[0] === 'dummy') {
-        if (row.start.length !== 1 || row.error.length !== 1) corrupt(`Invalid dummy incident for ${monitorId}`)
+      if (isLegacyDummyIncident(row)) {
         state.monitoringStartedAt[monitorId] = safeInteger(row.start[0], `monitoringStartedAt.${monitorId}`)
         continue
       }
@@ -485,7 +492,7 @@ export class CompactedMonitorStateWrapper {
   setIncident(monitorId: string, index: number, incident: IncidentRecord): void {
     const hasDummy = this.data.monitoringStartedAt[monitorId] !== undefined
     if (hasDummy && index === 0) {
-      if (incident.error[0] !== 'dummy' || incident.start.length !== 1) {
+      if (!isLegacyDummyIncident(incident)) {
         throw new Error('Legacy monitoring marker must remain a dummy incident')
       }
       this.data.monitoringStartedAt[monitorId] = safeInteger(incident.start[0], `monitoringStartedAt.${monitorId}`)
@@ -509,10 +516,7 @@ export class CompactedMonitorStateWrapper {
   }
 
   appendIncident(monitorId: string, incident: IncidentRecord): void {
-    if (incident.error[0] === 'dummy') {
-      if (incident.start.length !== 1 || incident.error.length !== 1) {
-        throw new CorruptStateError(`Invalid dummy incident for ${monitorId}`)
-      }
+    if (isLegacyDummyIncident(incident)) {
       this.data.monitoringStartedAt[monitorId] = safeInteger(incident.start[0], `monitoringStartedAt.${monitorId}`)
       return
     }
@@ -532,10 +536,7 @@ export class CompactedMonitorStateWrapper {
   }
 
   unshiftIncident(monitorId: string, incident: IncidentRecord): void {
-    if (incident.error[0] === 'dummy') {
-      if (incident.start.length !== 1 || incident.error.length !== 1) {
-        throw new CorruptStateError(`Invalid dummy incident for ${monitorId}`)
-      }
+    if (isLegacyDummyIncident(incident)) {
       this.data.monitoringStartedAt[monitorId] = safeInteger(incident.start[0], `monitoringStartedAt.${monitorId}`)
       return
     }

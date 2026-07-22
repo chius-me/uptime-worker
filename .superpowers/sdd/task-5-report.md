@@ -177,3 +177,51 @@ git diff --check: exit 0
 - Confirmed `uncompact()` carries `monitoringStartedAt` separately and no longer synthesizes dummy rows; only the legacy wrapper index methods retain the virtual marker.
 - Confirmed the empty-string 503 response has the fixed body, `no-store`, JSON/CORS headers, and Task 7 security headers on all three API routes.
 - Confirmed frozen input includes the incident, changes array, and change objects; error-change and recovery transitions operate on copies.
+
+## Sentinel review remediation: exact historical dummy marker
+
+### Scope
+
+- Centralized legacy dummy recognition in `isLegacyDummyIncident` and applied it to compacted/row v1 migration, legacy append/unshift/set handling, summary selection, baseline extraction, and public incident projection.
+- The only baseline marker is now exactly one start, exactly one `dummy` error, and a non-null end equal to that single start.
+- Open `dummy` errors, nonzero-duration records, and all other lookalikes remain real incidents and classify publicly as `Connection failed`.
+
+### RED
+
+Command:
+
+```sh
+npx vitest run tests/state-machine.test.ts tests/store.test.ts tests/api.test.ts tests/security.test.ts
+```
+
+Result:
+
+```text
+Test Files  2 failed | 2 passed (4)
+Tests       4 failed | 45 passed (49)
+```
+
+Expected failures showed open row-oriented and compacted-v1 `dummy` records being converted to `monitoringStartedAt`, legacy appends treating open/nonzero-duration records as markers, and the API incorrectly reporting an open `dummy` incident as healthy.
+
+### GREEN
+
+Command:
+
+```sh
+npx vitest run tests/state-machine.test.ts tests/store.test.ts tests/api.test.ts tests/security.test.ts && npx tsc --noEmit
+```
+
+Result:
+
+```text
+Test Files  4 passed (4)
+Tests       49 passed (49)
+TypeScript: exit 0
+```
+
+### Sentinel self-review
+
+- Confirmed the predicate checks both array cardinalities, the exact sentinel string, non-null resolution, and equality of resolution/start time.
+- Confirmed both compacted-column and row-oriented migrations share the same predicate.
+- Confirmed legacy append, unshift, and virtual-marker set paths cannot reinterpret an open or nonzero-duration real incident as baseline metadata.
+- Confirmed the public summary for an open `dummy` error is down with `Connection failed`, public incident history retains it, and `monitoringStartedAt` remains absent.

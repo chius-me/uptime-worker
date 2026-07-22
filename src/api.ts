@@ -11,7 +11,12 @@ import type {
 } from '../types/config'
 import type { Env } from './index'
 import { publicMessageForInternalError } from './probe'
-import { CompactedMonitorStateWrapper, CorruptStateError, getFromStore } from './store'
+import {
+  CompactedMonitorStateWrapper,
+  CorruptStateError,
+  getFromStore,
+  isLegacyDummyIncident,
+} from './store'
 
 const STALE_AFTER_SECONDS = 180
 const globalpingLocationPart = /^[\p{L} '-]+$/u
@@ -153,16 +158,13 @@ function publicPageConfig(page: PageConfig): PageConfig {
   }
 }
 
-function isDummyIncident(incident: IncidentRecord): boolean {
-  return incident.error[0] === 'dummy'
-}
-
 function summaryForMonitor(
   state: MonitorState,
   monitor: MonitorTarget,
   stale: boolean
 ): DataPayload['monitors'][string] {
-  const incidents = (state.incident[monitor.id] || []).filter((incident) => !isDummyIncident(incident))
+  const incidents = (state.incident[monitor.id] || [])
+    .filter((incident) => !isLegacyDummyIncident(incident))
   const latencies = state.latency[monitor.id] || []
   const lastIncident = incidents[incidents.length - 1]
   const lastLatency = latencies[latencies.length - 1]
@@ -191,7 +193,7 @@ export function buildDataPayload(
   const monitorById = new Map(monitorsConfig.map((monitor) => [monitor.id, monitor]))
   const legacyMonitoringStartedAt = Object.fromEntries(
     Object.entries(state.incident).flatMap(([id, incidents]) => {
-      const dummy = incidents.find(isDummyIncident)
+      const dummy = incidents.find(isLegacyDummyIncident)
       return dummy?.start[0] === undefined ? [] : [[id, dummy.start[0]]]
     })
   )
@@ -207,7 +209,9 @@ export function buildDataPayload(
       .filter(([id]) => configuredIds.has(id))
       .map(([id, incidents]) => [
         id,
-        incidents.filter((item) => !isDummyIncident(item)).map((item) => toPublicIncident(id, item)),
+        incidents
+          .filter((item) => !isLegacyDummyIncident(item))
+          .map((item) => toPublicIncident(id, item)),
       ])
   )
   const latency = Object.fromEntries(

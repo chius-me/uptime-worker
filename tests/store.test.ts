@@ -131,6 +131,52 @@ describe('versioned compacted state', () => {
     expect(state.getCompactedStateStr()).not.toContain('dummy')
   })
 
+  it('migrates an open row-oriented dummy error as a real incident', () => {
+    const state = new CompactedMonitorStateWrapper(JSON.stringify({
+      lastUpdate: 300,
+      overallUp: 0,
+      overallDown: 1,
+      incident: { api: [{ start: [300], end: null, error: ['dummy'] }] },
+      latency: {},
+    }))
+
+    expect(state.data.monitoringStartedAt.api).toBeUndefined()
+    expect(state.data.incident.api).toMatchObject({
+      id: ['api:300'],
+      resolvedAt: [null],
+      changes: [[{ at: 300, internalError: 'dummy', publicMessage: 'Connection failed' }]],
+    })
+  })
+
+  it('migrates an open compacted-v1 dummy error as a real incident', () => {
+    const state = new CompactedMonitorStateWrapper(JSON.stringify({
+      lastUpdate: 300,
+      overallUp: 0,
+      overallDown: 1,
+      incident: { api: { start: [[300]], end: [null], error: [['dummy']] } },
+      latency: {},
+    }))
+
+    expect(state.data.monitoringStartedAt.api).toBeUndefined()
+    expect(state.data.incident.api).toMatchObject({
+      id: ['api:300'],
+      resolvedAt: [null],
+      changes: [[{ at: 300, internalError: 'dummy', publicMessage: 'Connection failed' }]],
+    })
+  })
+
+  it('keeps open and nonzero-duration legacy dummy appends as real incidents', () => {
+    const state = new CompactedMonitorStateWrapper(null)
+    state.appendIncident('api', { start: [300], end: null, error: ['dummy'] })
+    state.appendIncident('api', { start: [400], end: 410, error: ['dummy'] })
+
+    expect(state.data.monitoringStartedAt.api).toBeUndefined()
+    expect(state.incidentLen('api')).toBe(2)
+    expect(state.getIncident('api', 0)).toEqual({ start: [300], end: null, error: ['dummy'] })
+    expect(state.getIncident('api', 1)).toEqual({ start: [400], end: 410, error: ['dummy'] })
+    expect(state.data.incident.api.id).toEqual(['api:300', 'api:400'])
+  })
+
   it('treats an empty stored string as corrupt and preserves it when reading D1', async () => {
     const env = {
       UPTIME_WORKER_D1: {

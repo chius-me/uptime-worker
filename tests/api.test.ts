@@ -278,6 +278,31 @@ describe('public status API contracts', () => {
     })
   })
 
+  it('projects an open dummy error as a real down incident, not a monitoring baseline', () => {
+    const payload = buildDataPayload(
+      {
+        lastUpdate: 1_000,
+        overallUp: 0,
+        overallDown: 1,
+        incident: { blog: [{ start: [900], end: null, error: ['dummy'] }] },
+        latency: { blog: [{ time: 1_000, ping: 42, loc: 'SFO' }] },
+      },
+      [monitor('blog')],
+      page,
+      1_010
+    )
+
+    expect(payload.monitors.blog).toMatchObject({ up: false, message: 'Connection failed' })
+    expect(payload.state.monitoringStartedAt.blog).toBeUndefined()
+    expect(payload.state.incident.blog).toHaveLength(1)
+    expect(payload.state.incident.blog[0]).toMatchObject({
+      id: 'blog:900',
+      startedAt: 900,
+      resolvedAt: null,
+      error: ['Connection failed'],
+    })
+  })
+
   it('adapts v2 incidents while retaining only their public changes', () => {
     const incident = toPublicIncident('api', {
       id: 'incident-1',
