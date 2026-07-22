@@ -196,3 +196,59 @@ Output:
 ### Review-remediation concerns
 
 None.
+
+## Re-review remediation evidence
+
+### RED
+
+Command:
+
+```sh
+npx vitest run tests/api.test.ts
+```
+
+Output:
+
+```text
+ RUN  v4.1.10 /Users/chius/repo/github/uptime-worker/.worktrees/codex-review-remediation
+
+ ❯ tests/api.test.ts (16 tests | 1 failed)
+     × does not reinterpret old custom-proxy locations as Globalping display values
+
+ FAIL  tests/api.test.ts > public status API contracts > does not reinterpret old custom-proxy locations as Globalping display values
+AssertionError: expected 'internal.service.local/room' to be null
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 15 passed (16)
+```
+
+### GREEN
+
+Command:
+
+```sh
+npx vitest run tests/api.test.ts && npx tsc --noEmit
+```
+
+Output:
+
+```text
+ RUN  v4.1.10 /Users/chius/repo/github/uptime-worker/.worktrees/codex-review-remediation
+
+ Test Files  1 passed (1)
+      Tests  16 passed (16)
+```
+
+`npx tsc --noEmit` completed with exit code 0 and no output.
+
+### Re-review self-review
+
+- The Globalping projection is now source-independent: a historical value is accepted only if it has exactly two non-empty country/city parts, each 1–30 Unicode code points of letters, ASCII spaces, apostrophes, or hyphens, with at least one letter.
+- The total display length is capped at 64 Unicode code points; dots, colons, digits, percent escapes, underscores, at-signs, extra slashes, and controls are rejected by the allowlist.
+- The regression simulates a current Globalping config with historical domain-, host:port-, encoded-, and IP-shaped values, which are null in both summary and history. `US/New York` and `México/Ciudad de México` remain supported.
+- Local/worker and custom HTTP(S) policies remain unchanged.
+- `git diff --check` passed.
+
+### Re-review concerns
+
+None.

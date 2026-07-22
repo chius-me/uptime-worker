@@ -174,6 +174,44 @@ describe('public status API contracts', () => {
     expect(payload.state.latency.malformed[0].loc).toBeNull()
   })
 
+  it('does not reinterpret old custom-proxy locations as Globalping display values', () => {
+    const payload = buildDataPayload(
+      {
+        ...emptyState,
+        lastUpdate: 1_000,
+        incident: {
+          oldDomain: [{ start: [900], end: 1_000, error: ['dummy'] }],
+          oldHost: [{ start: [900], end: 1_000, error: ['dummy'] }],
+          encoded: [{ start: [900], end: 1_000, error: ['dummy'] }],
+          network: [{ start: [900], end: 1_000, error: ['dummy'] }],
+          unicode: [{ start: [900], end: 1_000, error: ['dummy'] }],
+        },
+        latency: {
+          oldDomain: [{ time: 1_000, ping: 42, loc: 'internal.service.local/room' }],
+          oldHost: [{ time: 1_000, ping: 42, loc: 'host:8443/room' }],
+          encoded: [{ time: 1_000, ping: 42, loc: 'US%2F/New York' }],
+          network: [{ time: 1_000, ping: 42, loc: '10.0.0.1/room' }],
+          unicode: [{ time: 1_000, ping: 42, loc: 'México/Ciudad de México' }],
+        },
+      },
+      ['oldDomain', 'oldHost', 'encoded', 'network', 'unicode'].map((id) => ({
+        ...monitor(id),
+        checkProxy: 'globalping://probes',
+      })),
+      page,
+      1_010
+    )
+
+    for (const id of ['oldDomain', 'oldHost', 'encoded', 'network']) {
+      expect(payload.monitors[id].location).toBeNull()
+      expect(payload.state.latency[id][0].loc).toBeNull()
+    }
+    expect(JSON.stringify(payload)).not.toContain('internal.service.local')
+    expect(JSON.stringify(payload)).not.toContain('host:8443')
+    expect(payload.monitors.unicode.location).toBe('México/Ciudad de México')
+    expect(payload.state.latency.unicode[0].loc).toBe('México/Ciudad de México')
+  })
+
   it('normalizes all public error messages', () => {
     expect(publicMessage('request timeout')).toBe('Timeout')
     expect(publicMessage('expected code 200, got 500')).toBe('Unexpected status code')

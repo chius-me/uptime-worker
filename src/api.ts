@@ -13,6 +13,7 @@ import type { Env } from './index'
 import { CompactedMonitorStateWrapper, getFromStore } from './store'
 
 const STALE_AFTER_SECONDS = 180
+const globalpingLocationPart = /^[\p{L} '-]+$/u
 
 const jsonHeaders = {
   'Content-Type': 'application/json',
@@ -113,9 +114,15 @@ export function publicLocation(location: string, monitor: MonitorTarget): string
     return /^[A-Z]{3}$/.test(location) ? location : null
   }
   if (proxy.startsWith('globalping://')) {
-    return location.length <= 64 && /^[^\x00-\x1F\x7F/]+\/[^\x00-\x1F\x7F/]+$/.test(location)
-      ? location
-      : null
+    const parts = location.split('/')
+    const validDisplayValue =
+      Array.from(location).length <= 64 &&
+      parts.length === 2 &&
+      parts.every((part) => {
+        const length = Array.from(part).length
+        return length >= 1 && length <= 30 && globalpingLocationPart.test(part) && /\p{L}/u.test(part)
+      })
+    return validDisplayValue ? location : null
   }
   return null
 }
