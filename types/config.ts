@@ -45,6 +45,8 @@ export type MonitorTarget = {
   responseForbiddenKeyword?: string
   checkProxy?: string
   checkProxyFallback?: boolean
+  checkProxyAllowedHosts?: string[]
+  forwardHeaders?: string[]
 }
 
 export type WorkerConfig<TEnv = Env> = {
@@ -105,6 +107,7 @@ export type PublicMessage =
   | 'Unexpected status code'
   | 'TLS validation failed'
   | 'Content check failed'
+  | 'Content check inconclusive'
   | 'Connection failed'
 
 export type PublicIncidentChange = {

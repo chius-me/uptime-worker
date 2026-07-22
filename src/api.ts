@@ -29,6 +29,7 @@ const publicMessages = new Set<PublicMessage>([
   'Unexpected status code',
   'TLS validation failed',
   'Content check failed',
+  'Content check inconclusive',
   'Connection failed',
 ])
 
@@ -48,6 +49,7 @@ export type BadgePayload = {
 }
 
 export function publicMessage(error: string): PublicMessage {
+  if (/content check inconclusive/i.test(error)) return 'Content check inconclusive'
   if (/timeout|abort/i.test(error)) return 'Timeout'
   if (/status|expected code/i.test(error)) return 'Unexpected status code'
   if (/tls|certificate/i.test(error)) return 'TLS validation failed'

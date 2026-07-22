@@ -9,6 +9,7 @@ import { CompactedMonitorStateWrapper, getFromStore, setToStore } from './store'
 import { isBasicAuthValid } from './auth'
 import { buildDataPayload, handleBadgeAPI, handleHealthAPI } from './api'
 import { withSecurityHeaders } from './security'
+import type { ProbeStatus } from './probe'
 import pLimit from 'p-limit'
 
 export interface Env {
@@ -83,7 +84,7 @@ export default {
 
     // Parallel check multiple monitors
     // Max concurrent connection is 6 limited by Cloudflare Workers, we use 5 here to be safe
-    type CheckResult = { id: string; location: string; status: { ping: number; up: boolean; err: string } }
+    type CheckResult = { id: string; location: string; status: ProbeStatus }
     let checkQueue: Promise<CheckResult>[] = []
     let checkResult: Record<string, CheckResult> = {};
     const limit = pLimit(5);
@@ -160,13 +161,13 @@ export default {
           state.appendIncident(monitor.id, {
             start: [currentTimeSecond],
             end: null,
-            error: [status.err],
+            error: [status.internalError],
           })
           monitorStatusChanged = true
-        } else if (lastIncident.end === null && lastIncident.error.slice(-1)[0] !== status.err) {
+        } else if (lastIncident.end === null && lastIncident.error.slice(-1)[0] !== status.internalError) {
           // append if the error message changes
           lastIncident.start.push(currentTimeSecond)
-          lastIncident.error.push(status.err)
+          lastIncident.error.push(status.internalError)
 
           // write back the modified last incident
           state.setIncident(monitor.id, state.incidentLen(monitor.id) - 1, lastIncident)
@@ -206,7 +207,7 @@ export default {
                 false,
                 currentIncident.start[0],
                 currentTimeSecond,
-                status.err
+                status.publicMessage
               )
             }
           } else {
@@ -221,7 +222,7 @@ export default {
               false,
               currentIncident.start[0],
               currentTimeSecond,
-              status.err
+              status.publicMessage
             )
           }
         } catch {
@@ -235,7 +236,7 @@ export default {
             monitor,
             currentIncident.start[0],
             currentTimeSecond,
-            status.err
+            status.publicMessage
           )
         } catch {
           logEvent('callback_failed', { type: 'on_incident' })
@@ -309,22 +310,14 @@ export class RemoteChecker extends DurableObject {
 
   async getLocationAndStatus(
     monitor: MonitorTarget
-  ): Promise<{ location: string; status: { ping: number; up: boolean; err: string } }> {
-    const colo = (await getWorkerLocation()) as string
-    console.log(`Running remote checker (DurableObject) at ${colo}...`)
+  ): Promise<{ location: string; status: ProbeStatus }> {
+    const colo = await getWorkerLocation()
+    logEvent('remote_checker_started', { monitorId: monitor.id, location: colo })
     const status = await getStatus(monitor)
     return {
       location: colo,
       status: status,
     }
-  }
-
-  async kill() {
-    // Throwing an error in `blockConcurrencyWhile` will terminate the Durable Object instance
-    // https://developers.cloudflare.com/durable-objects/api/state/#blockconcurrencywhile
-    this.ctx.blockConcurrencyWhile(async () => {
-      throw 'killed'
-    })
   }
 }
 

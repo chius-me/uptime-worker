@@ -1,15 +1,22 @@
 import { MonitorTarget, WebhookConfig, WorkerConfig } from '../types/config'
 import { maintenances } from '../uptime.config'
 import { logEvent } from './log'
+import { readTextLimited } from './probe'
 
 import type { Env } from './index'
 
 async function getWorkerLocation() {
-  const res = await fetch('https://cloudflare.com/cdn-cgi/trace')
-  const text = await res.text()
-
-  const colo = /^colo=(.*)$/m.exec(text)?.[1]
-  return colo
+  let res: Response | undefined
+  try {
+    res = await fetchTimeout('https://cloudflare.com/cdn-cgi/trace', 3000)
+    if (!res.ok) return 'unknown'
+    const text = await readTextLimited(res, 4096)
+    return /^colo=([A-Za-z0-9_-]{1,32})$/m.exec(text)?.[1] ?? 'unknown'
+  } catch {
+    return 'unknown'
+  } finally {
+    await Promise.resolve(res?.body?.cancel()).catch(() => undefined)
+  }
 }
 
 const fetchTimeout = (
@@ -18,18 +25,22 @@ const fetchTimeout = (
   { signal, ...options }: RequestInit<RequestInitCfProperties> | undefined = {}
 ): Promise<Response> => {
   const controller = new AbortController()
+  const abort = () => controller.abort()
   const promise = fetch(url, { signal: controller.signal, ...options })
-  if (signal) signal.addEventListener('abort', () => controller.abort())
+  if (signal) signal.addEventListener('abort', abort, { once: true })
   const timeout = setTimeout(() => controller.abort(), ms)
-  return promise.finally(() => clearTimeout(timeout))
+  return promise.finally(() => {
+    clearTimeout(timeout)
+    signal?.removeEventListener('abort', abort)
+  })
 }
 
 function withTimeout<T>(millis: number, promise: Promise<T>): Promise<T> {
-  const timeout = new Promise<T>((resolve, reject) =>
-    setTimeout(() => reject(new Error(`Promise timed out after ${millis}ms`)), millis)
-  )
-
-  return Promise.race([promise, timeout])
+  let timer: ReturnType<typeof setTimeout>
+  const timeout = new Promise<T>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`Promise timed out after ${millis}ms`)), millis)
+  })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
 }
 
 function formatStatusChangeNotification(
