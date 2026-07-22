@@ -196,6 +196,59 @@ describe('runMonitoring', () => {
     expect(after.events.map(({ eventKey }) => eventKey)).toEqual(['api:100:down'])
   })
 
+  it('retains an incident older than 90 days while a queued notification is pending', async () => {
+    const now = 100 + 91 * 24 * 60 * 60
+    const state = emptyState()
+    state.incident.api = {
+      id: ['api:100'],
+      startedAt: [100],
+      resolvedAt: [200],
+      changes: [[{
+        at: 100,
+        internalError: 'Connection: refused',
+        publicMessage: 'Connection failed',
+      }]],
+      downEventKey: ['api:100:down'],
+      recoveryEventKey: ['api:100:recovery'],
+      downNotifiedAt: [150],
+      recoveryNotifiedAt: [null],
+    }
+
+    const output = await runMonitoring(
+      readEnv(state),
+      { monitors: [monitor('api')], notification: { webhook } },
+      now,
+      'run-aged',
+      {
+        doMonitor: async () => ({ id: 'api', location: 'SFO', status: successfulProbe(1) }),
+        getWorkerLocation: async () => 'SFO',
+      }
+    )
+
+    expect(output.state.incident.api.id).toEqual(['api:100'])
+    expect(output.state.incident.api.recoveryNotifiedAt).toEqual([null])
+  })
+
+  it('defensively suppresses notifications for an empty webhook array', async () => {
+    const output = await runMonitoring(
+      readEnv(),
+      { monitors: [monitor('api')], notification: { webhook: [] } },
+      100,
+      'run-empty-webhook',
+      {
+        doMonitor: async () => ({
+          id: 'api',
+          location: 'SFO',
+          status: failedProbe('Connection: refused'),
+        }),
+        getWorkerLocation: async () => 'SFO',
+      }
+    )
+
+    expect(output.events).toEqual([])
+    expect(output.state.incident.api.downEventKey).toEqual([null])
+  })
+
   it('derives status-change callbacks from transitions and incident callbacks from every down check', async () => {
     const config: WorkerConfig = { monitors: [monitor('api')] }
     const down = await runMonitoring(readEnv(), config, 100, 'run-1', {

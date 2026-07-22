@@ -85,6 +85,7 @@ function schedulerWith(overrides: Partial<SchedulerDependencies> = {}) {
     invokeCallbacks: vi.fn(async () => undefined),
     sendHeartbeat: vi.fn(async () => undefined),
     dispatchPendingNotifications: vi.fn(async () => ({ attempted: 0, delivered: 0, failed: 0 })),
+    cleanupRetention: vi.fn(async () => undefined),
     randomUUID: () => 'uuid',
     ...overrides,
   }
@@ -127,9 +128,10 @@ describe('Scheduler', () => {
     expect(dependencies.invokeCallbacks).not.toHaveBeenCalled()
     expect(dependencies.sendHeartbeat).not.toHaveBeenCalled()
     expect(dependencies.dispatchPendingNotifications).not.toHaveBeenCalled()
+    expect(dependencies.cleanupRetention).not.toHaveBeenCalled()
   })
 
-  it('runs callbacks and heartbeat only after persistence and continues after heartbeat failure', async () => {
+  it('dispatches immediately after persistence and isolates later cleanup and heartbeat failures', async () => {
     const order: string[] = []
     const { scheduler } = schedulerWith({
       runMonitoring: vi.fn(async () => { order.push('run'); return runOutput() }),
@@ -140,10 +142,61 @@ describe('Scheduler', () => {
         order.push('dispatch')
         return { attempted: 0, delivered: 0, failed: 0 }
       }),
+      cleanupRetention: vi.fn(async () => {
+        order.push('cleanup')
+        throw new Error('private cleanup diagnostic')
+      }),
     })
 
     await expect(scheduler.run(1_000)).resolves.toMatchObject({ status: 'completed' })
-    expect(order).toEqual(['run', 'persist', 'callbacks', 'heartbeat', 'dispatch'])
+    expect(order).toEqual(['run', 'persist', 'dispatch', 'cleanup', 'heartbeat', 'callbacks'])
+  })
+
+  it('clears the overlap lock after a never-settling callback reaches its five-second bound', async () => {
+    vi.useFakeTimers()
+    try {
+      const onStatusChange = vi.fn()
+        .mockImplementationOnce(() => new Promise(() => undefined))
+        .mockResolvedValue(undefined)
+      const callbackConfig: WorkerConfig = {
+        ...config,
+        callbacks: { onStatusChange },
+      }
+      const output = runOutput()
+      output.callbacks = [{
+        type: 'status-change',
+        monitorId: 'api',
+        isUp: false,
+        startedAt: 100,
+        checkedAt: 110,
+        publicMessage: 'Connection failed',
+      }]
+      const dispatch = vi.fn(async () => ({ attempted: 0, delivered: 0, failed: 0 }))
+      const { scheduler } = schedulerWith({
+        resolveConfig: () => callbackConfig,
+        runMonitoring: vi.fn(async () => output),
+        invokeCallbacks: invokeCallbackActions,
+        dispatchPendingNotifications: dispatch,
+      })
+
+      const first = scheduler.run(1_000)
+      let firstSettled = false
+      void first.then(() => { firstSettled = true })
+      await vi.waitFor(() => expect(onStatusChange).toHaveBeenCalledOnce())
+      expect(dispatch).toHaveBeenCalledOnce()
+      await expect(scheduler.run(1_001)).resolves.toEqual({
+        status: 'skipped-overlap',
+        scheduledAt: 1_001,
+      })
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      await Promise.resolve()
+      expect(firstSettled).toBe(true)
+      await expect(scheduler.run(2_000)).resolves.toMatchObject({ status: 'completed' })
+      expect(onStatusChange).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('delegates scheduled events to the singleton Durable Object', async () => {
@@ -195,11 +248,12 @@ function outboxEvent(kind: NotificationEvent['kind']): StoredOutbox {
 
 function dispatchEnv(
   rows: StoredOutbox[],
-  options: { failConfirmation?: boolean } = {}
+  options: { failConfirmation?: boolean; state?: MonitorStateCompactedV2 } = {}
 ) {
-  let state = stateWithIncident()
+  let state = structuredClone(options.state ?? stateWithIncident())
   const queries: string[] = []
   const failureUpdates: unknown[][] = []
+  const terminalUpdates: unknown[][] = []
   let confirmationAttempts = 0
   const db = {
     prepare(sql: string) {
@@ -211,25 +265,31 @@ function dispatchEnv(
           async all() {
             return {
               results: rows.filter((row) => {
-                if (row.status !== 'pending' || row.next_attempt_at > Number(args[0])) return false
-                if (!row.event_key.endsWith(':recovery')) return true
-                return rows.some((candidate) => (
-                  candidate.event_key === `${JSON.parse(row.payload).incidentId}:down` &&
-                  candidate.status === 'delivered'
-                ))
+                return row.status === 'pending' && row.next_attempt_at <= Number(args[0])
               }).sort((left, right) => left.next_attempt_at - right.next_attempt_at || left.event_key.localeCompare(right.event_key)),
             }
           },
           async first() {
             if (sql.includes('FROM uptimeflare')) return { value: JSON.stringify(state) }
+            if (sql.includes('SELECT status') && sql.includes('notification_outbox')) {
+              const row = rows.find((candidate) => candidate.event_key === args[0])
+              return row ? { status: row.status, last_error_code: row.last_error_code } : null
+            }
             return null
           },
           async run() {
-            failureUpdates.push(args)
             const event = rows.find((row) => row.event_key === args[2])!
-            event.attempts += 1
-            event.next_attempt_at = Number(args[0])
-            event.last_error_code = String(args[1])
+            if (sql.includes("SET status = 'delivered'")) {
+              terminalUpdates.push(args)
+              event.status = 'delivered'
+              event.delivered_at = Number(args[0])
+              event.last_error_code = String(args[1])
+            } else {
+              failureUpdates.push(args)
+              event.attempts += 1
+              event.next_attempt_at = Number(args[0])
+              event.last_error_code = String(args[1])
+            }
             return { success: true }
           },
         }),
@@ -251,6 +311,7 @@ function dispatchEnv(
     env: { UPTIME_WORKER_D1: db } as any,
     queries,
     failureUpdates,
+    terminalUpdates,
     getState: () => state,
     getConfirmationAttempts: () => confirmationAttempts,
   }
@@ -276,13 +337,90 @@ describe('notification outbox dispatcher', () => {
     await dispatchPendingNotifications(fake.env, 20, dependencies)
     expect(notify).toHaveBeenCalledTimes(2)
     expect(notify.mock.calls[1][3]).toBe('api:100:recovery')
-    expect(fake.queries.find((query) => query.includes('notification_outbox'))).toMatch(/ORDER BY/i)
+    const selection = fake.queries.find((query) => query.includes('FROM notification_outbox AS candidate'))!
+    expect(selection).toMatch(/ORDER BY/i)
+    expect(selection).not.toContain('json_extract')
   })
 
-  it('uses exponential backoff with a fixed error code when delivery fails', async () => {
-    const rows = [outboxEvent('down')]
+  it('terminalizes malformed JSON without blocking a later valid event', async () => {
+    const malformed = outboxEvent('down')
+    malformed.event_key = 'poison-row'
+    malformed.payload = '{not-json'
+    const valid = outboxEvent('down')
+    valid.next_attempt_at = 1_001
+    const rows = [malformed, valid]
     const fake = dispatchEnv(rows)
-    const notify = vi.fn(async () => { throw new Error('secret provider response') })
+    const notify = vi.fn(async (
+      _env: unknown,
+      _webhook: unknown,
+      _message: string,
+      _idempotencyKey?: string
+    ) => undefined)
+
+    const summary = await dispatchPendingNotifications(fake.env, 20, {
+      now: () => 2_000,
+      resolveConfig: () => config,
+      webhookNotify: notify,
+    })
+
+    expect(summary).toEqual({ attempted: 2, delivered: 1, failed: 1 })
+    expect(malformed).toMatchObject({
+      status: 'delivered',
+      delivered_at: 2_000,
+      last_error_code: 'invalid_payload',
+    })
+    expect(notify).toHaveBeenCalledOnce()
+    expect(notify.mock.calls[0][3]).toBe('api:100:down')
+  })
+
+  it('does not treat a terminalized invalid down row as recovery delivery', async () => {
+    const invalidDown = outboxEvent('down')
+    invalidDown.payload = '{not-json'
+    const recovery = outboxEvent('recovery')
+    const rows = [invalidDown, recovery]
+    const fake = dispatchEnv(rows)
+    const notify = vi.fn(async () => undefined)
+
+    await dispatchPendingNotifications(fake.env, 20, {
+      now: () => 1_000,
+      resolveConfig: () => config,
+      webhookNotify: notify,
+    })
+
+    expect(invalidDown).toMatchObject({ status: 'delivered', last_error_code: 'invalid_payload' })
+    expect(recovery.status).toBe('pending')
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['invalid kind', { kind: 'sideways' }],
+    ['invalid incident relation', { eventKey: 'other:100:down', incidentId: 'other:100' }],
+    ['non-OK recovery message', { kind: 'recovery', eventKey: 'api:100:recovery', publicMessage: 'Connection failed' }],
+    ['OK down message', { publicMessage: 'OK' }],
+  ])('terminalizes a valid JSON payload with %s before external delivery', async (_name, changes) => {
+    const row = outboxEvent('down')
+    const payload = { ...JSON.parse(row.payload), ...changes }
+    row.event_key = String(payload.eventKey)
+    row.payload = JSON.stringify(payload)
+    const fake = dispatchEnv([row])
+    const notify = vi.fn(async () => undefined)
+
+    await dispatchPendingNotifications(fake.env, 20, {
+      now: () => 1_000,
+      resolveConfig: () => config,
+      webhookNotify: notify,
+    })
+
+    expect(row).toMatchObject({ status: 'delivered', last_error_code: 'invalid_payload' })
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('terminalizes an orphaned event before webhook delivery', async () => {
+    const row = outboxEvent('down')
+    const orphanState = stateWithIncident()
+    delete orphanState.incident.api
+    const fake = dispatchEnv([row], { state: orphanState })
+    const notify = vi.fn(async () => undefined)
 
     const summary = await dispatchPendingNotifications(fake.env, 20, {
       now: () => 1_000,
@@ -291,12 +429,53 @@ describe('notification outbox dispatcher', () => {
     })
 
     expect(summary).toEqual({ attempted: 1, delivered: 0, failed: 1 })
+    expect(row).toMatchObject({ status: 'delivered', last_error_code: 'orphaned_event' })
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('does not acknowledge a valid event when the webhook array is empty', async () => {
+    const row = outboxEvent('down')
+    const fake = dispatchEnv([row])
+
+    const summary = await dispatchPendingNotifications(fake.env, 20, {
+      now: () => 1_000,
+      resolveConfig: () => ({ ...config, notification: { webhook: [] } }),
+      webhookNotify: vi.fn(async () => undefined),
+    })
+
+    expect(summary).toEqual({ attempted: 1, delivered: 0, failed: 1 })
+    expect(row).toMatchObject({ status: 'pending', attempts: 1, last_error_code: 'delivery_failed' })
+  })
+
+  it('uses exponential backoff with a fixed error code when delivery fails', async () => {
+    const rows = [outboxEvent('down')]
+    const fake = dispatchEnv(rows)
+    const notify = vi.fn(async () => { throw new Error('secret provider response') })
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+
+    let summary
+    let logOutput = ''
+    try {
+      summary = await dispatchPendingNotifications(fake.env, 20, {
+        now: () => 1_000,
+        resolveConfig: () => config,
+        webhookNotify: notify,
+      })
+      logOutput = log.mock.calls.flat().join(' ')
+    } finally {
+      log.mockRestore()
+    }
+
+    expect(summary).toEqual({ attempted: 1, delivered: 0, failed: 1 })
     expect(rows[0]).toMatchObject({
       attempts: 1,
       next_attempt_at: 1_030,
       last_error_code: 'delivery_failed',
     })
     expect(JSON.stringify(fake.failureUpdates)).not.toContain('secret provider response')
+    expect(logOutput).toContain('notification_delivery_failed')
+    expect(logOutput).toContain('monitorId="api"')
+    expect(logOutput).not.toContain('api:100:down')
   })
 
   it('acknowledges delivery and the matching state timestamp in one batch', async () => {
@@ -372,6 +551,84 @@ describe('callback delivery', () => {
     expect(onIncident).toHaveBeenCalledOnce()
     expect(log.mock.calls.flat().join(' ')).not.toContain('callback secret')
     log.mockRestore()
+  })
+
+  it('bounds each callback invocation to five seconds', async () => {
+    vi.useFakeTimers()
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    try {
+      const never = vi.fn(() => new Promise(() => undefined))
+      const pending = invokeCallbackActions({} as any, {
+        ...config,
+        callbacks: { onIncident: never },
+      }, [{
+        type: 'incident',
+        monitorId: 'api',
+        startedAt: 100,
+        checkedAt: 110,
+        publicMessage: 'Connection failed',
+      }])
+      let settled = false
+      void pending.then(() => { settled = true })
+
+      await vi.advanceTimersByTimeAsync(5_000)
+      await Promise.resolve()
+      expect(settled).toBe(true)
+      expect(never).toHaveBeenCalledOnce()
+      expect(log.mock.calls.flat().join(' ')).toContain('callback_failed')
+    } finally {
+      log.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('D1 retention cleanup', () => {
+  it('deletes only bounded 90-day-old run summaries and delivered outbox rows', async () => {
+    const statements: Array<{ sql: string; args: unknown[] }> = []
+    const batch = vi.fn(async () => [])
+    const env = {
+      UPTIME_WORKER_D1: {
+        prepare: (sql: string) => ({
+          bind: (...args: unknown[]) => {
+            const statement = { sql, args }
+            statements.push(statement)
+            return statement
+          },
+        }),
+        batch,
+      },
+    } as any
+    const { cleanupD1Retention } = await import('../src/scheduler')
+
+    await cleanupD1Retention(env, 100 + 90 * 24 * 60 * 60)
+
+    expect(batch).toHaveBeenCalledOnce()
+    expect(statements).toHaveLength(2)
+    expect(statements[0].sql).toMatch(/DELETE FROM monitor_runs[\s\S]*LIMIT 1000/i)
+    expect(statements[1].sql).toMatch(/DELETE FROM notification_outbox[\s\S]*status = 'delivered'[\s\S]*LIMIT 1000/i)
+    expect(statements[1].sql).toMatch(/NOT EXISTS[\s\S]*status = 'pending'/i)
+    expect(statements[0].args).toEqual([100])
+    expect(statements[1].args).toEqual([100])
+  })
+
+  it('logs a fixed category and resolves when cleanup fails', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const { cleanupD1Retention } = await import('../src/scheduler')
+    let output = ''
+    try {
+      await expect(cleanupD1Retention({
+        UPTIME_WORKER_D1: {
+          prepare: () => ({ bind: () => ({}) }),
+          batch: async () => { throw new Error('private database diagnostic') },
+        },
+      } as any, 10_000_000)).resolves.toBeUndefined()
+      output = log.mock.calls.flat().join(' ')
+    } finally {
+      log.mockRestore()
+    }
+    expect(output).toContain('retention_cleanup_failed')
+    expect(output).not.toContain('private database diagnostic')
   })
 })
 

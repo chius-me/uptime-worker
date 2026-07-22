@@ -36,6 +36,7 @@ function validateTimeout(timeout: number | undefined, path: string) {
 
 function validateWebhook(webhook: WebhookConfig, path: string) {
   if (Array.isArray(webhook)) {
+    if (webhook.length === 0) throw new Error(`Webhook array must not be empty at ${path}`)
     webhook.forEach((item, index) => validateWebhook(item, `${path}[${index}]`))
     return
   }
@@ -50,6 +51,10 @@ function validateWebhook(webhook: WebhookConfig, path: string) {
     throw new Error(`Webhook URL must use HTTPS at ${path}.url`)
   }
   validateTimeout(webhook.timeout, `${path}.timeout`)
+}
+
+export function hasUsableWebhook(webhook: WebhookConfig | undefined): webhook is WebhookConfig {
+  return webhook !== undefined && (!Array.isArray(webhook) || webhook.length > 0)
 }
 
 export function validateAndResolveConfig(

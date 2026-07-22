@@ -6,7 +6,7 @@ import type {
   WorkerConfig,
 } from '../types/config'
 import { workerConfig } from '../uptime.config'
-import { validateAndResolveConfig } from './config'
+import { hasUsableWebhook, validateAndResolveConfig } from './config'
 import type { Env } from './index'
 import { logEvent } from './log'
 import { fetchAndConsumeWithTimeout } from './probe'
@@ -19,6 +19,7 @@ import {
 import { CompactedMonitorStateWrapper, getFromStore } from './store'
 import {
   formatStatusChangeNotification,
+  withTimeout,
   webhookNotify as deliverWebhook,
 } from './util'
 
@@ -46,6 +47,7 @@ export type SchedulerDependencies = {
   invokeCallbacks: typeof invokeCallbackActions
   sendHeartbeat: typeof sendHeartbeat
   dispatchPendingNotifications: typeof dispatchPendingNotifications
+  cleanupRetention: typeof cleanupD1Retention
   randomUUID: () => string
 }
 
@@ -83,6 +85,8 @@ const PUBLIC_MESSAGES = new Set<PublicMessage>([
   'Content check inconclusive',
   'Connection failed',
 ])
+const SAFE_MONITOR_ID = /^[A-Za-z0-9_-]{1,64}$/
+const MAX_STORED_PAYLOAD_LENGTH = 2_048
 
 function runtimeConfig(env: Env): WorkerConfig {
   return validateAndResolveConfig(workerConfig, {
@@ -98,10 +102,21 @@ const defaultDependencies: SchedulerDependencies = {
   invokeCallbacks: invokeCallbackActions,
   sendHeartbeat,
   dispatchPendingNotifications,
+  cleanupRetention: cleanupD1Retention,
   randomUUID: () => crypto.randomUUID(),
 }
 
 function parseStoredPayload(row: StoredOutboxRow): StoredPayload {
+  if (
+    typeof row.event_key !== 'string' ||
+    row.event_key.length < 1 ||
+    row.event_key.length > 128 ||
+    typeof row.payload !== 'string' ||
+    row.payload.length < 1 ||
+    row.payload.length > MAX_STORED_PAYLOAD_LENGTH
+  ) {
+    throw new Error('invalid_payload')
+  }
   let value: unknown
   try {
     value = JSON.parse(row.payload)
@@ -127,6 +142,7 @@ function parseStoredPayload(row: StoredOutboxRow): StoredPayload {
     record.eventKey !== row.event_key ||
     typeof record.incidentId !== 'string' ||
     typeof record.monitorId !== 'string' ||
+    !SAFE_MONITOR_ID.test(record.monitorId) ||
     (record.kind !== 'down' && record.kind !== 'recovery') ||
     !Number.isSafeInteger(record.startedAt) ||
     (record.startedAt as number) < 0 ||
@@ -134,11 +150,25 @@ function parseStoredPayload(row: StoredOutboxRow): StoredPayload {
     (record.checkedAt as number) < (record.startedAt as number) ||
     typeof record.publicMessage !== 'string' ||
     !PUBLIC_MESSAGES.has(record.publicMessage as PublicMessage) ||
-    record.eventKey !== `${record.incidentId}:${record.kind}`
+    record.incidentId !== `${record.monitorId}:${record.startedAt}` ||
+    record.eventKey !== `${record.incidentId}:${record.kind}` ||
+    (record.kind === 'recovery' && record.publicMessage !== 'OK') ||
+    (record.kind === 'down' && (
+      record.publicMessage === 'OK' || record.publicMessage === 'Not checked yet'
+    ))
   ) {
     throw new Error('invalid_payload')
   }
   return record as StoredPayload
+}
+
+function hasMatchingEvent(state: MonitorStateCompactedV2, payload: StoredPayload): boolean {
+  const columns = state.incident[payload.monitorId]
+  const index = columns?.id.indexOf(payload.incidentId) ?? -1
+  if (!columns || index < 0) return false
+  return payload.kind === 'down'
+    ? columns.downEventKey[index] === payload.eventKey
+    : columns.recoveryEventKey[index] === payload.eventKey
 }
 
 function markDelivered(
@@ -172,6 +202,19 @@ async function recordDeliveryFailure(
   ).bind(now + delay, code, row.event_key).run()
 }
 
+async function terminalizeOutboxRow(
+  env: Env,
+  row: StoredOutboxRow,
+  now: number,
+  code: 'invalid_payload' | 'orphaned_event'
+): Promise<void> {
+  await env.UPTIME_WORKER_D1.prepare(
+    `UPDATE notification_outbox
+     SET status = 'delivered', delivered_at = ?, last_error_code = ?
+     WHERE event_key = ? AND status = 'pending'`
+  ).bind(now, code, row.event_key).run()
+}
+
 export async function dispatchPendingNotifications(
   env: Env,
   limit: number,
@@ -189,49 +232,86 @@ export async function dispatchPendingNotifications(
      FROM notification_outbox AS candidate
      WHERE candidate.status = 'pending'
        AND candidate.next_attempt_at <= ?
-       AND (
-         json_extract(candidate.payload, '$.kind') = 'down'
-         OR EXISTS (
-           SELECT 1
-           FROM notification_outbox AS down
-           WHERE down.event_key = json_extract(candidate.payload, '$.incidentId') || ':down'
-             AND down.status = 'delivered'
-         )
-       )
      ORDER BY candidate.next_attempt_at ASC,
-              CAST(json_extract(candidate.payload, '$.checkedAt') AS INTEGER) ASC,
-              CASE json_extract(candidate.payload, '$.kind') WHEN 'down' THEN 0 ELSE 1 END ASC,
               candidate.event_key ASC
      LIMIT ?`
   ).bind(now, limit).all<StoredOutboxRow>()
   const rows = due.results ?? []
   const summary: DispatchSummary = { attempted: 0, delivered: 0, failed: 0 }
 
+  const parsedRows: Array<{
+    row: StoredOutboxRow
+    payload: StoredPayload
+    recoveryEligible: boolean
+  }> = []
   for (const row of rows) {
     summary.attempted += 1
-    let payload: StoredPayload
     try {
-      payload = parseStoredPayload(row)
-      const monitor = config.monitors.find(({ id }) => id === payload.monitorId)
-      if (!monitor || !config.notification?.webhook) throw new Error('delivery_unavailable')
+      const payload = parseStoredPayload(row)
+      let recoveryEligible = true
+      if (payload.kind === 'recovery') {
+        const down = await env.UPTIME_WORKER_D1.prepare(
+          'SELECT status, last_error_code FROM notification_outbox WHERE event_key = ?'
+        ).bind(`${payload.incidentId}:down`).first<{
+          status: string
+          last_error_code: string | null
+        }>()
+        recoveryEligible = down?.status === 'delivered' && down.last_error_code === null
+      }
+      parsedRows.push({ row, payload, recoveryEligible })
+    } catch {
+      await terminalizeOutboxRow(env, row, now, 'invalid_payload')
+      summary.failed += 1
+      logEvent('notification_invalid_payload', {})
+    }
+  }
+
+  for (const { row, payload, recoveryEligible } of parsedRows) {
+    if (!recoveryEligible) continue
+
+    let wrapper: CompactedMonitorStateWrapper
+    try {
+      wrapper = new CompactedMonitorStateWrapper(await getFromStore(env, 'state'))
+    } catch {
+      await recordDeliveryFailure(env, row, now, 'delivery_failed')
+      summary.failed += 1
+      logEvent('notification_delivery_failed', { monitorId: payload.monitorId, kind: payload.kind })
+      continue
+    }
+    if (!hasMatchingEvent(wrapper.data, payload)) {
+      await terminalizeOutboxRow(env, row, now, 'orphaned_event')
+      summary.failed += 1
+      logEvent('notification_orphaned', { monitorId: payload.monitorId, kind: payload.kind })
+      continue
+    }
+
+    const monitor = config.monitors.find(({ id }) => id === payload.monitorId)
+    const webhook = config.notification?.webhook
+    if (!monitor || !hasUsableWebhook(webhook)) {
+      await recordDeliveryFailure(env, row, now, 'delivery_failed')
+      summary.failed += 1
+      logEvent('notification_delivery_failed', { monitorId: payload.monitorId, kind: payload.kind })
+      continue
+    }
+
+    try {
       const message = formatStatusChangeNotification(
         monitor,
         payload.kind === 'recovery',
         payload.startedAt,
         payload.checkedAt,
         payload.publicMessage,
-        config.notification.timeZone ?? 'Etc/GMT'
+        config.notification?.timeZone ?? 'Etc/GMT'
       )
-      await webhookNotify(env, config.notification.webhook, message, payload.eventKey)
+      await webhookNotify(env, webhook, message, payload.eventKey)
     } catch {
       await recordDeliveryFailure(env, row, now, 'delivery_failed')
       summary.failed += 1
-      logEvent('notification_delivery_failed', { eventKey: row.event_key })
+      logEvent('notification_delivery_failed', { monitorId: payload.monitorId, kind: payload.kind })
       continue
     }
 
     try {
-      const wrapper = new CompactedMonitorStateWrapper(await getFromStore(env, 'state'))
       markDelivered(wrapper.data, payload, now)
       await env.UPTIME_WORKER_D1.batch([
         env.UPTIME_WORKER_D1.prepare(
@@ -246,7 +326,7 @@ export async function dispatchPendingNotifications(
       summary.delivered += 1
     } catch {
       summary.failed += 1
-      logEvent('notification_confirmation_failed', { eventKey: row.event_key })
+      logEvent('notification_confirmation_failed', { monitorId: payload.monitorId, kind: payload.kind })
     }
   }
   return summary
@@ -262,28 +342,72 @@ export async function invokeCallbackActions(
     if (!monitor) continue
     try {
       if (action.type === 'status-change') {
-        await config.callbacks?.onStatusChange?.(
+        const callback = config.callbacks?.onStatusChange
+        if (!callback) continue
+        await withTimeout(5_000, Promise.resolve(callback(
           env,
           monitor,
           action.isUp === true,
           action.startedAt,
           action.checkedAt,
           action.publicMessage
-        )
+        )))
       } else {
-        await config.callbacks?.onIncident?.(
+        const callback = config.callbacks?.onIncident
+        if (!callback) continue
+        await withTimeout(5_000, Promise.resolve(callback(
           env,
           monitor,
           action.startedAt,
           action.checkedAt,
           action.publicMessage
-        )
+        )))
       }
     } catch {
       logEvent('callback_failed', {
         type: action.type === 'status-change' ? 'on_status_change' : 'on_incident',
       })
     }
+  }
+}
+
+export async function cleanupD1Retention(
+  env: Env,
+  now = Math.floor(Date.now() / 1000)
+): Promise<void> {
+  const cutoff = now - 90 * 24 * 60 * 60
+  try {
+    await env.UPTIME_WORKER_D1.batch([
+      env.UPTIME_WORKER_D1.prepare(
+        `DELETE FROM monitor_runs
+         WHERE run_id IN (
+           SELECT run_id FROM monitor_runs
+           WHERE completed_at < ?
+           ORDER BY completed_at ASC
+           LIMIT 1000
+         )`
+      ).bind(cutoff),
+      env.UPTIME_WORKER_D1.prepare(
+        `DELETE FROM notification_outbox
+         WHERE event_key IN (
+           SELECT candidate.event_key FROM notification_outbox AS candidate
+           WHERE candidate.status = 'delivered'
+             AND candidate.delivered_at IS NOT NULL
+             AND candidate.delivered_at < ?
+             AND NOT EXISTS (
+               SELECT 1 FROM notification_outbox AS dependent
+               WHERE dependent.status = 'pending'
+                 AND candidate.event_key GLOB '*:down'
+                 AND dependent.event_key =
+                   substr(candidate.event_key, 1, length(candidate.event_key) - 4) || 'recovery'
+             )
+           ORDER BY candidate.delivered_at ASC
+           LIMIT 1000
+         )`
+      ).bind(cutoff),
+    ])
+  } catch {
+    logEvent('retention_cleanup_failed', {})
   }
 }
 
@@ -341,16 +465,21 @@ export class Scheduler extends DurableObject<Env> {
       runId
     )
     await this.dependencies.persistRun(this.schedulerEnv, output)
-    await this.dependencies.invokeCallbacks(this.schedulerEnv, config, output.callbacks)
+    const notifications = await this.dependencies.dispatchPendingNotifications(
+      this.schedulerEnv,
+      20
+    )
+    try {
+      await this.dependencies.cleanupRetention(this.schedulerEnv, now)
+    } catch {
+      logEvent('retention_cleanup_failed', {})
+    }
     try {
       await this.dependencies.sendHeartbeat(this.schedulerEnv)
     } catch {
       logEvent('heartbeat_failed', {})
     }
-    const notifications = await this.dependencies.dispatchPendingNotifications(
-      this.schedulerEnv,
-      20
-    )
+    await this.dependencies.invokeCallbacks(this.schedulerEnv, config, output.callbacks)
     logEvent('monitor_run_completed', {
       runId: output.summary.runId,
       total: output.summary.total,

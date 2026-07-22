@@ -18,6 +18,7 @@ import {
 import { CompactedMonitorStateWrapper, getFromStore } from './store'
 import { getWorkerLocation as resolveWorkerLocation } from './util'
 import { maintenances as configuredMaintenances } from '../uptime.config'
+import { hasUsableWebhook } from './config'
 
 type CheckResult = { id: string; location: string; status: ProbeStatus }
 
@@ -154,7 +155,9 @@ function retainRecentData(
   while (
     columns.id.length > 0 &&
     columns.resolvedAt[0] !== null &&
-    columns.resolvedAt[0]! < now - 90 * 24 * 60 * 60
+    columns.resolvedAt[0]! < now - 90 * 24 * 60 * 60 &&
+    (columns.downEventKey[0] === null || columns.downNotifiedAt[0] !== null) &&
+    (columns.recoveryEventKey[0] === null || columns.recoveryNotifiedAt[0] !== null)
   ) {
     for (const values of Object.values(columns)) values.shift()
   }
@@ -219,7 +222,7 @@ export async function runMonitoring(
     const notification = applyNotificationSuppression(transitioned, {
       maintenanceMonitorIds: maintenanceIds,
       skipNotificationIds: config.notification?.skipNotificationIds,
-      notificationsEnabled: config.notification?.webhook !== undefined,
+      notificationsEnabled: hasUsableWebhook(config.notification?.webhook),
     })
     storeIncident(wrapper.data, monitor.id, previous, notification.incident)
     events.push(...notification.events)

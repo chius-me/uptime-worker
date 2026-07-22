@@ -74,4 +74,11 @@ describe('runtime configuration resolution', () => {
     expect(() => validateAndResolveConfig(proxyConfig, {})).toThrow('Invalid proxy URL at monitors[0].checkProxy')
     expect(() => validateAndResolveConfig(webhookConfig, {})).toThrow('Webhook URL must use HTTPS at notification.webhook.url')
   })
+
+  it('rejects an empty webhook array', () => {
+    expect(() => validateAndResolveConfig({
+      monitors: [],
+      notification: { webhook: [] },
+    }, {})).toThrow('Webhook array must not be empty at notification.webhook')
+  })
 })
