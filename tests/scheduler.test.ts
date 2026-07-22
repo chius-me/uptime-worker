@@ -286,6 +286,23 @@ function outboxEvent(kind: NotificationEvent['kind']): StoredOutbox {
   return outboxFor(100, kind)
 }
 
+function outboxForMonitor(
+  monitorId: string,
+  startedAt: number,
+  kind: NotificationEvent['kind'] = 'down'
+): StoredOutbox {
+  const row = outboxFor(startedAt, kind)
+  const payload = JSON.parse(row.payload)
+  row.event_key = `${monitorId}:${startedAt}:${kind}`
+  row.payload = JSON.stringify({
+    ...payload,
+    eventKey: row.event_key,
+    incidentId: `${monitorId}:${startedAt}`,
+    monitorId,
+  })
+  return row
+}
+
 function stateForOutbox(rows: readonly StoredOutbox[]): MonitorStateCompactedV2 {
   const state = stateWithIncident()
   state.incident.api = {
@@ -330,7 +347,11 @@ function stateForOutbox(rows: readonly StoredOutbox[]): MonitorStateCompactedV2 
 
 function dispatchEnv(
   rows: StoredOutbox[],
-  options: { failConfirmation?: boolean; state?: MonitorStateCompactedV2 } = {}
+  options: {
+    failConfirmation?: boolean
+    failConfirmationCount?: number
+    state?: MonitorStateCompactedV2
+  } = {}
 ) {
   let state = structuredClone(options.state ?? stateWithIncident())
   const queries: string[] = []
@@ -345,6 +366,66 @@ function dispatchEnv(
           sql,
           args,
           async all() {
+            if (sql.includes('configured_monitors')) {
+              const monitorIds = new Set(JSON.parse(String(args[0])) as string[])
+              return {
+                results: rows
+                  .filter((row) => {
+                    if (row.status !== 'pending' || row.next_attempt_at > Number(args[1])) return false
+                    try {
+                      return monitorIds.has(String(JSON.parse(row.payload).monitorId))
+                    } catch {
+                      return false
+                    }
+                  })
+                  .sort((left, right) => left.next_attempt_at - right.next_attempt_at || left.event_key.localeCompare(right.event_key))
+                  .slice(0, Number(args[2])),
+              }
+            }
+            if (sql.includes('FROM monitor_ranges') && sql.includes('JOIN notification_outbox')) {
+              const ranges: Array<[string, string]> = []
+              for (let index = 0; index < args.length - 1; index += 3) {
+                ranges.push([String(args[index + 1]), String(args[index + 2])])
+              }
+              return {
+                results: rows
+                  .filter((row) => row.status === 'pending' && ranges.some(([lower, upper]) => (
+                    row.event_key >= lower && row.event_key < upper
+                  )))
+                  .sort((left, right) => right.event_key.localeCompare(left.event_key))
+                  .slice(0, Number(args.at(-1))),
+              }
+            }
+            if (sql.includes('event_key >= ?') && !sql.includes('AS candidate')) {
+              const ranges: Array<[string, string]> = []
+              for (let index = 0; index < args.length - 1; index += 2) {
+                ranges.push([String(args[index]), String(args[index + 1])])
+              }
+              return {
+                results: rows
+                  .filter((row) => row.status === 'pending' && ranges.some(([lower, upper]) => (
+                    row.event_key >= lower && row.event_key < upper
+                  )))
+                  .sort((left, right) => right.event_key.localeCompare(left.event_key))
+                  .slice(0, Number(args.at(-1))),
+              }
+            }
+            if (sql.includes('json_extract')) {
+              const monitorIds = new Set(args.slice(0, -1).map(String))
+              return {
+                results: rows
+                  .filter((row) => {
+                    if (row.status !== 'pending') return false
+                    try {
+                      return monitorIds.has(String(JSON.parse(row.payload).monitorId))
+                    } catch {
+                      return false
+                    }
+                  })
+                  .sort((left, right) => right.event_key.localeCompare(left.event_key))
+                  .slice(0, Number(args.at(-1))),
+              }
+            }
             if (sql.includes("WHERE status = 'pending'") && !sql.includes('AS candidate')) {
               return {
                 results: rows
@@ -354,9 +435,15 @@ function dispatchEnv(
             }
             return {
               results: rows.filter((row) => {
-                return row.status === 'pending' && row.next_attempt_at <= Number(args[0])
+                const ranges: Array<[string, string]> = []
+                for (let index = 1; index < args.length - 1; index += 2) {
+                  ranges.push([String(args[index]), String(args[index + 1])])
+                }
+                return row.status === 'pending' &&
+                  row.next_attempt_at <= Number(args[0]) &&
+                  !ranges.some(([lower, upper]) => row.event_key >= lower && row.event_key < upper)
               }).sort((left, right) => left.next_attempt_at - right.next_attempt_at || left.event_key.localeCompare(right.event_key))
-                .slice(0, Number(args[1])),
+                .slice(0, Number(args.at(-1))),
             }
           },
           async first() {
@@ -396,7 +483,10 @@ function dispatchEnv(
     },
     async batch(statements: Array<{ sql: string; args: unknown[] }>) {
       confirmationAttempts += 1
-      if (options.failConfirmation) throw new Error('confirmation unavailable')
+      if (
+        options.failConfirmation ||
+        confirmationAttempts <= (options.failConfirmationCount ?? 0)
+      ) throw new Error('confirmation unavailable')
       const outboxStatement = statements.find(({ sql }) => sql.includes('UPDATE notification_outbox'))!
       const stateStatement = statements.find(({ sql }) => sql.includes('INSERT INTO uptimeflare'))!
       const terminal = outboxStatement.args.length === 3
@@ -421,6 +511,193 @@ function dispatchEnv(
 }
 
 describe('notification outbox dispatcher', () => {
+  it('terminalizes removed-monitor recovery before down and never calls its webhook', async () => {
+    const rows = [outboxEvent('down'), outboxEvent('recovery')]
+    const fake = dispatchEnv(rows, { state: stateForOutbox(rows) })
+    const notify = vi.fn(async () => undefined)
+
+    const summary = await dispatchPendingNotifications(fake.env, 20, {
+      now: () => 1_000,
+      resolveConfig: () => ({ ...config, monitors: [] }),
+      webhookNotify: notify,
+    })
+
+    expect(summary).toEqual({ attempted: 2, delivered: 0, failed: 2 })
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        event_key: 'api:100:down',
+        status: 'delivered',
+        last_error_code: 'removed_monitor',
+      }),
+      expect.objectContaining({
+        event_key: 'api:100:recovery',
+        status: 'delivered',
+        last_error_code: 'removed_monitor',
+      }),
+    ]))
+    expect(fake.getState().incident.api.downEventKey).toEqual([null])
+    expect(fake.getState().incident.api.recoveryEventKey).toEqual([null])
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('keeps removed-monitor rows and event markers pending when atomic reconciliation fails', async () => {
+    const rows = [outboxEvent('down'), outboxEvent('recovery')]
+    const fake = dispatchEnv(rows, {
+      failConfirmation: true,
+      state: stateForOutbox(rows),
+    })
+
+    await dispatchPendingNotifications(fake.env, 20, {
+      now: () => 1_000,
+      resolveConfig: () => ({ ...config, monitors: [] }),
+      webhookNotify: vi.fn(async () => undefined),
+    })
+
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event_key: 'api:100:down', status: 'pending', attempts: 0 }),
+      expect.objectContaining({ event_key: 'api:100:recovery', status: 'pending', attempts: 0 }),
+    ]))
+    expect(fake.getState().incident.api.downEventKey).toEqual(['api:100:down'])
+    expect(fake.getState().incident.api.recoveryEventKey).toEqual(['api:100:recovery'])
+  })
+
+  it('terminalizes at most ten removed-monitor rows in one deterministic pass', async () => {
+    const rows = Array.from({ length: 11 }, (_, index) => outboxFor(100 + index, 'down'))
+    const fake = dispatchEnv(rows, { state: stateForOutbox(rows) })
+
+    const summary = await dispatchPendingNotifications(fake.env, 20, {
+      now: () => 1_000,
+      resolveConfig: () => ({ ...config, monitors: [] }),
+      webhookNotify: vi.fn(async () => undefined),
+    })
+
+    expect(summary).toEqual({ attempted: 10, delivered: 0, failed: 10 })
+    expect(rows.filter(({ status }) => status === 'delivered')).toHaveLength(10)
+    expect(rows.filter(({ status }) => status === 'pending')).toEqual([
+      expect.objectContaining({ event_key: 'api:100:down', attempts: 0 }),
+    ])
+  })
+
+  it('delivers a configured due row when removed-monitor atomic reconciliation fails', async () => {
+    const removed = outboxEvent('down')
+    const configured = outboxFor(200, 'down')
+    configured.event_key = 'web:200:down'
+    configured.payload = JSON.stringify({
+      ...JSON.parse(configured.payload),
+      eventKey: 'web:200:down',
+      incidentId: 'web:200',
+      monitorId: 'web',
+    })
+    const state = stateForOutbox([removed])
+    state.monitoringStartedAt.web = 1
+    state.incident.web = {
+      id: ['web:200'],
+      startedAt: [200],
+      resolvedAt: [null],
+      changes: [[{
+        at: 200,
+        internalError: 'Connection: refused',
+        publicMessage: 'Connection failed',
+      }]],
+      downEventKey: ['web:200:down'],
+      recoveryEventKey: [null],
+      downNotifiedAt: [null],
+      recoveryNotifiedAt: [null],
+    }
+    const fake = dispatchEnv([removed, configured], {
+      failConfirmationCount: 1,
+      state,
+    })
+    const notify = vi.fn(async (
+      _env: unknown,
+      _webhook: unknown,
+      _message: string,
+      _idempotencyKey?: string
+    ) => undefined)
+
+    const summary = await dispatchPendingNotifications(fake.env, 20, {
+      now: () => 1_000,
+      resolveConfig: () => ({
+        ...config,
+        monitors: [{ id: 'web', name: 'Web', method: 'GET', target: 'https://web.example' }],
+      }),
+      webhookNotify: notify,
+    })
+
+    expect(summary).toEqual({ attempted: 2, delivered: 1, failed: 1 })
+    expect(removed).toMatchObject({ status: 'pending', attempts: 0 })
+    expect(configured).toMatchObject({ status: 'delivered', last_error_code: null })
+    expect(notify).toHaveBeenCalledOnce()
+    expect(notify.mock.calls[0][3]).toBe('web:200:down')
+  })
+
+  it('reserves configured delivery beyond a permanently failing removed-monitor window', async () => {
+    const state = stateWithIncident()
+    state.monitoringStartedAt = {}
+    state.incident = {}
+    const rows: StoredOutbox[] = []
+    for (let index = 0; index < 21; index += 1) {
+      const monitorId = `r${String(index).padStart(2, '0')}`
+      const row = outboxForMonitor(monitorId, 100)
+      rows.push(row)
+      state.monitoringStartedAt[monitorId] = 1
+      state.incident[monitorId] = {
+        id: [`${monitorId}:100`],
+        startedAt: [100],
+        resolvedAt: [null],
+        changes: [[{
+          at: 100,
+          internalError: 'Connection: refused',
+          publicMessage: 'Connection failed',
+        }]],
+        downEventKey: [row.event_key],
+        recoveryEventKey: [null],
+        downNotifiedAt: [null],
+        recoveryNotifiedAt: [null],
+      }
+    }
+    for (let index = 0; index < 401; index += 1) {
+      rows.push(outboxForMonitor('r20', 200 + index))
+    }
+    const configured = outboxForMonitor('web', 1_000)
+    rows.push(configured)
+    state.monitoringStartedAt.web = 1
+    state.incident.web = {
+      id: ['web:1000'],
+      startedAt: [1_000],
+      resolvedAt: [null],
+      changes: [[{
+        at: 1_000,
+        internalError: 'Connection: refused',
+        publicMessage: 'Connection failed',
+      }]],
+      downEventKey: ['web:1000:down'],
+      recoveryEventKey: [null],
+      downNotifiedAt: [null],
+      recoveryNotifiedAt: [null],
+    }
+    const fake = dispatchEnv(rows, { failConfirmationCount: 10, state })
+    const notify = vi.fn(async (
+      _env: unknown,
+      _webhook: unknown,
+      _message: string,
+      _idempotencyKey?: string
+    ) => undefined)
+
+    await dispatchPendingNotifications(fake.env, 20, {
+      now: () => 1_000,
+      resolveConfig: () => ({
+        ...config,
+        monitors: [{ id: 'web', name: 'Web', method: 'GET', target: 'https://web.example' }],
+      }),
+      webhookNotify: notify,
+    })
+
+    expect(configured).toMatchObject({ status: 'delivered', last_error_code: null })
+    expect(notify).toHaveBeenCalledOnce()
+    expect(notify.mock.calls[0][3]).toBe('web:1000:down')
+  })
+
   it('queries due rows deterministically and sends recovery only after down is delivered', async () => {
     const rows = [outboxEvent('recovery'), outboxEvent('down')]
     const fake = dispatchEnv(rows)
@@ -927,6 +1204,7 @@ describe('deployment schema', () => {
     const wrangler = await readFile(fileURLToPath(String(new URL('../wrangler.toml', import.meta.url))), 'utf8')
     const initial = await readFile(fileURLToPath(String(new URL('../migrations/0001_initial.sql', import.meta.url))), 'utf8')
     const outbox = await readFile(fileURLToPath(String(new URL('../migrations/0002_notification_outbox.sql', import.meta.url))), 'utf8')
+    const monitorLookup = await readFile(fileURLToPath(String(new URL('../migrations/0003_outbox_monitor_lookup.sql', import.meta.url))), 'utf8')
 
     expect(wrangler).toMatch(/tag\s*=\s*"v1"[\s\S]*new_sqlite_classes\s*=\s*\["RemoteChecker"\]/)
     expect(wrangler).toMatch(/name\s*=\s*"SCHEDULER_DO"[\s\S]*class_name\s*=\s*"Scheduler"/)
@@ -937,11 +1215,15 @@ describe('deployment schema', () => {
     expect(outbox).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_due[\s\S]*status\s*,\s*next_attempt_at\s*,\s*event_key/i)
     expect(outbox).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_delivered[\s\S]*status\s*,\s*delivered_at\s*,\s*event_key/i)
     expect(outbox).toMatch(/CREATE INDEX IF NOT EXISTS monitor_runs_completed[\s\S]*completed_at\s*,\s*run_id/i)
+    expect(monitorLookup).toMatch(
+      /CREATE INDEX IF NOT EXISTS notification_outbox_pending_monitor[\s\S]*status\s*,\s*event_key/i
+    )
 
     const compatibility = await readFile(fileURLToPath(String(new URL('../deploy/init.sql', import.meta.url))), 'utf8')
     expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_due/i)
     expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_delivered/i)
     expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS monitor_runs_completed/i)
+    expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_pending_monitor/i)
   })
 
   it('deploys D1 migrations and documents new and compatibility installs', async () => {

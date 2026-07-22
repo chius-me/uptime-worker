@@ -93,6 +93,8 @@ const PUBLIC_MESSAGES = new Set<PublicMessage>([
 ])
 const SAFE_MONITOR_ID = /^[A-Za-z0-9_-]{1,64}$/
 const MAX_STORED_PAYLOAD_LENGTH = 2_048
+const MAX_REMOVED_MONITORS_PER_DISPATCH = 20
+const MAX_REMOVED_EVENTS_PER_DISPATCH = 10
 
 function runtimeConfig(env: Env): WorkerConfig {
   return validateAndResolveConfig(workerConfig, {
@@ -230,6 +232,81 @@ function reconcileTerminalEvent(
   return true
 }
 
+function removedMonitorCandidates(
+  state: MonitorStateCompactedV2,
+  config: WorkerConfig
+): string[] {
+  const configuredMonitorIds = new Set(config.monitors.map(({ id }) => id))
+  return [...new Set([
+    ...Object.keys(state.monitoringStartedAt),
+    ...Object.keys(state.incident),
+    ...Object.keys(state.latency),
+  ])]
+    .filter((monitorId) => !configuredMonitorIds.has(monitorId))
+    .sort()
+    .slice(0, MAX_REMOVED_MONITORS_PER_DISPATCH)
+}
+
+async function pendingRemovedMonitorRows(
+  env: Env,
+  monitorIds: readonly string[]
+): Promise<StoredOutboxRow[]> {
+  if (monitorIds.length === 0) return []
+  const rangeRows = monitorIds.map(() => '(?, ?, ?)').join(', ')
+  const ranges = monitorIds.flatMap((monitorId) => [
+    monitorId,
+    `${monitorId}:`,
+    `${monitorId};`,
+  ])
+  const result = await env.UPTIME_WORKER_D1.prepare(
+    `WITH monitor_ranges(monitor_id, lower_bound, upper_bound) AS (
+       VALUES ${rangeRows}
+     )
+     SELECT outbox.event_key, outbox.payload, outbox.status,
+            outbox.attempts, outbox.next_attempt_at
+     FROM monitor_ranges
+     JOIN notification_outbox AS outbox
+       ON outbox.status = 'pending'
+      AND outbox.event_key >= monitor_ranges.lower_bound
+      AND outbox.event_key < monitor_ranges.upper_bound
+     ORDER BY monitor_ranges.monitor_id ASC, outbox.event_key DESC
+     LIMIT ?`
+  ).bind(
+    ...ranges,
+    MAX_REMOVED_EVENTS_PER_DISPATCH
+  ).all<StoredOutboxRow>()
+  return result.results ?? []
+}
+
+async function pendingConfiguredMonitorRows(
+  env: Env,
+  config: WorkerConfig,
+  now: number,
+  limit: number
+): Promise<StoredOutboxRow[]> {
+  if (config.monitors.length === 0) return []
+  const result = await env.UPTIME_WORKER_D1.prepare(
+    `WITH configured_monitors(monitor_id) AS (
+       SELECT CAST(value AS TEXT) FROM json_each(?)
+     )
+     SELECT outbox.event_key, outbox.payload, outbox.status,
+            outbox.attempts, outbox.next_attempt_at
+     FROM configured_monitors
+     CROSS JOIN notification_outbox AS outbox INDEXED BY notification_outbox_pending_monitor
+     WHERE outbox.status = 'pending'
+       AND outbox.event_key >= configured_monitors.monitor_id || ':'
+       AND outbox.event_key < configured_monitors.monitor_id || ';'
+       AND outbox.next_attempt_at <= ?
+     ORDER BY outbox.next_attempt_at ASC, outbox.event_key ASC
+     LIMIT ?`
+  ).bind(
+    JSON.stringify(config.monitors.map(({ id }) => id)),
+    now,
+    limit
+  ).all<StoredOutboxRow>()
+  return result.results ?? []
+}
+
 function markDelivered(
   state: MonitorStateCompactedV2,
   payload: StoredPayload,
@@ -265,9 +342,9 @@ async function terminalizeOutboxRow(
   env: Env,
   row: StoredOutboxRow,
   now: number,
-  code: 'invalid_payload' | 'orphaned_event' | 'blocked_dependency',
+  code: 'invalid_payload' | 'orphaned_event' | 'blocked_dependency' | 'removed_monitor',
   identity: StoredEventIdentity | null = null
-): Promise<void> {
+): Promise<boolean> {
   const terminalStatement = () => env.UPTIME_WORKER_D1.prepare(
     `UPDATE notification_outbox
      SET status = 'delivered', delivered_at = ?, last_error_code = ?
@@ -278,7 +355,7 @@ async function terminalizeOutboxRow(
     try {
       wrapper = new CompactedMonitorStateWrapper(await getFromStore(env, 'state'))
     } catch {
-      return
+      return false
     }
     if (reconcileTerminalEvent(wrapper.data, identity)) {
       try {
@@ -290,11 +367,64 @@ async function terminalizeOutboxRow(
         ])
       } catch {
         // Keep both the state key and Outbox row pending for an atomic retry.
+        return false
       }
-      return
+      return true
     }
   }
   await terminalStatement().run()
+  return true
+}
+
+async function terminalizeRemovedOutboxRow(
+  env: Env,
+  row: StoredOutboxRow,
+  now: number,
+  payload: StoredPayload
+): Promise<boolean> {
+  let wrapper: CompactedMonitorStateWrapper
+  try {
+    wrapper = new CompactedMonitorStateWrapper(await getFromStore(env, 'state'))
+  } catch {
+    return false
+  }
+  const columns = wrapper.data.incident[payload.monitorId]
+  const index = columns?.id.indexOf(payload.incidentId) ?? -1
+  if (
+    payload.kind === 'down' &&
+    columns &&
+    index >= 0 &&
+    columns.downEventKey[index] === payload.eventKey &&
+    columns.recoveryEventKey[index] !== null
+  ) {
+    const recoveryEventKey = columns.recoveryEventKey[index]!
+    const recovery = await env.UPTIME_WORKER_D1.prepare(
+      'SELECT status FROM notification_outbox WHERE event_key = ?'
+    ).bind(recoveryEventKey).first<{ status: 'pending' | 'delivered' }>()
+    if (recovery?.status === 'pending') return false
+    columns.recoveryEventKey[index] = null
+    columns.recoveryNotifiedAt[index] = null
+  }
+
+  if (!reconcileTerminalEvent(wrapper.data, payload)) {
+    return terminalizeOutboxRow(env, row, now, 'removed_monitor')
+  }
+  try {
+    await env.UPTIME_WORKER_D1.batch([
+      env.UPTIME_WORKER_D1.prepare(
+        `UPDATE notification_outbox
+         SET status = 'delivered', delivered_at = ?, last_error_code = ?
+         WHERE event_key = ? AND status = 'pending'`
+      ).bind(now, 'removed_monitor', row.event_key),
+      env.UPTIME_WORKER_D1.prepare(
+        'INSERT INTO uptimeflare (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+      ).bind('state', wrapper.getCompactedStateStr()),
+    ])
+    return true
+  } catch {
+    // The row and its event marker remain pending together for the next bounded pass.
+    return false
+  }
 }
 
 async function deferRecovery(
@@ -327,22 +457,84 @@ export async function dispatchPendingNotifications(
   let scanBatches = 0
   let deliveryAttempts = 0
   const seenEventKeys = new Set<string>()
+  let removedMonitorAttempts = 0
+  let excludedRemovedRanges: string[] = []
+
+  try {
+    const state = new CompactedMonitorStateWrapper(await getFromStore(env, 'state')).data
+    const removedMonitorIds = removedMonitorCandidates(state, config)
+    excludedRemovedRanges = removedMonitorIds.flatMap((monitorId) => [
+      `${monitorId}:`,
+      `${monitorId};`,
+    ])
+    const removedRows = await pendingRemovedMonitorRows(env, removedMonitorIds)
+    for (const row of removedRows) {
+      removedMonitorAttempts += 1
+      seenEventKeys.add(row.event_key)
+      scannedRows += 1
+      summary.attempted += 1
+      let payload: StoredPayload
+      try {
+        payload = parseStoredPayload(row)
+      } catch {
+        await terminalizeOutboxRow(
+          env,
+          row,
+          now,
+          'invalid_payload',
+          parseStoredIdentity(row)
+        )
+        summary.failed += 1
+        logEvent('notification_invalid_payload', {})
+        continue
+      }
+      await terminalizeRemovedOutboxRow(env, row, now, payload)
+      summary.failed += 1
+      logEvent('notification_removed_monitor', {
+        monitorId: payload.monitorId,
+        kind: payload.kind,
+      })
+    }
+  } catch {
+    // The regular due-row pass still makes bounded progress if targeted retirement is unavailable.
+  }
+  let configuredPriorityRows: StoredOutboxRow[] = []
+  if (removedMonitorAttempts > 0) {
+    try {
+      configuredPriorityRows = await pendingConfiguredMonitorRows(env, config, now, limit)
+    } catch {
+      // The regular due-row pass remains available if the reserved lookup fails.
+    }
+  }
 
   while (deliveryAttempts < limit && scannedRows < maxScannedRows && scanBatches < 25) {
+    const removedRangeExclusion = excludedRemovedRanges.length === 0
+      ? ''
+      : `AND NOT (${excludedRemovedRanges
+        .filter((_bound, index) => index % 2 === 0)
+        .map(() => '(candidate.event_key >= ? AND candidate.event_key < ?)')
+        .join(' OR ')})`
     const due = await env.UPTIME_WORKER_D1.prepare(
       `SELECT candidate.event_key, candidate.payload, candidate.status,
               candidate.attempts, candidate.next_attempt_at
        FROM notification_outbox AS candidate
        WHERE candidate.status = 'pending'
          AND candidate.next_attempt_at <= ?
+         ${removedRangeExclusion}
        ORDER BY candidate.next_attempt_at ASC,
                 candidate.event_key ASC
        LIMIT ?`
     ).bind(
       now,
+      ...excludedRemovedRanges,
       Math.min(2_500, scanBatchSize + seenEventKeys.size)
     ).all<StoredOutboxRow>()
-    const rows = (due.results ?? []).filter(({ event_key }) => !seenEventKeys.has(event_key))
+    const batchEventKeys = new Set(seenEventKeys)
+    const rows = [...configuredPriorityRows.splice(0), ...(due.results ?? [])].filter(({ event_key }) => {
+      if (batchEventKeys.has(event_key)) return false
+      batchEventKeys.add(event_key)
+      return true
+    })
     scanBatches += 1
     if (rows.length === 0) break
 
@@ -365,6 +557,19 @@ export async function dispatchPendingNotifications(
         )
         summary.failed += 1
         logEvent('notification_invalid_payload', {})
+        continue
+      }
+
+      const monitor = config.monitors.find(({ id }) => id === payload.monitorId)
+      if (!monitor) {
+        if (removedMonitorAttempts >= MAX_REMOVED_EVENTS_PER_DISPATCH) continue
+        removedMonitorAttempts += 1
+        await terminalizeRemovedOutboxRow(env, row, now, payload)
+        summary.failed += 1
+        logEvent('notification_removed_monitor', {
+          monitorId: payload.monitorId,
+          kind: payload.kind,
+        })
         continue
       }
 
@@ -408,9 +613,8 @@ export async function dispatchPendingNotifications(
         continue
       }
 
-      const monitor = config.monitors.find(({ id }) => id === payload.monitorId)
       const webhook = config.notification?.webhook
-      if (!monitor || !hasUsableWebhook(webhook)) {
+      if (!hasUsableWebhook(webhook)) {
         await recordDeliveryFailure(env, row, now, 'delivery_failed')
         summary.failed += 1
         logEvent('notification_delivery_failed', { monitorId: payload.monitorId, kind: payload.kind })

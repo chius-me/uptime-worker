@@ -19,6 +19,9 @@ CREATE INDEX IF NOT EXISTS notification_outbox_due
 CREATE INDEX IF NOT EXISTS notification_outbox_delivered
   ON notification_outbox (status, delivered_at, event_key);
 
+CREATE INDEX IF NOT EXISTS notification_outbox_pending_monitor
+  ON notification_outbox (status, event_key);
+
 CREATE TABLE IF NOT EXISTS monitor_runs (
   run_id TEXT PRIMARY KEY,
   scheduled_at INTEGER NOT NULL,

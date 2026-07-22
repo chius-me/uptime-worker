@@ -52,11 +52,32 @@ function readEnv(
     REMOTE_CHECKER_DO: {},
     UPTIME_WORKER_D1: {
       prepare: vi.fn((sql: string) => ({
-        bind: vi.fn(() => ({
+        bind: vi.fn((...args: unknown[]) => ({
           first: vi.fn(async () => state === null ? null : { value: JSON.stringify(state) }),
           all: vi.fn(async () => {
             if (pendingQueryError) throw pendingQueryError
             if (!sql.includes('notification_outbox')) return { results: [] }
+            if (sql.includes('monitor_ranges')) {
+              const monitorIds: string[] = []
+              for (let index = 0; index < args.length - 1; index += 3) {
+                const monitorId = String(args[index])
+                const lowerBound = String(args[index + 1])
+                const upperBound = String(args[index + 2])
+                if (pendingEventKeys.some((eventKey) => (
+                  eventKey >= lowerBound && eventKey < upperBound
+                ))) monitorIds.push(monitorId)
+              }
+              return {
+                results: monitorIds.map((monitor_id) => ({ monitor_id })),
+              }
+            }
+            if (sql.includes(' IN (')) {
+              return {
+                results: pendingEventKeys
+                  .filter((eventKey) => args.includes(eventKey))
+                  .map((event_key) => ({ event_key })),
+              }
+            }
             return { results: pendingEventKeys.map((event_key) => ({ event_key })) }
           }),
         })),
@@ -316,13 +337,185 @@ describe('runMonitoring', () => {
     expect(output.state.incident.api).toBeUndefined()
   })
 
-  it('fails before probing when pending-key lookup fails', async () => {
+  it('preserves removed-monitor state while an indexed pending dependency remains', async () => {
+    const state = emptyState()
+    state.monitoringStartedAt.removed = 10
+    state.incident.removed = {
+      id: ['removed:100'],
+      startedAt: [100],
+      resolvedAt: [null],
+      changes: [[{
+        at: 100,
+        internalError: 'Connection: refused',
+        publicMessage: 'Connection failed',
+      }]],
+      downEventKey: ['removed:100:down'],
+      recoveryEventKey: [null],
+      downNotifiedAt: [null],
+      recoveryNotifiedAt: [null],
+    }
+    const wrapper = new CompactedMonitorStateWrapper(JSON.stringify(state))
+    wrapper.appendLatency('removed', { loc: 'SFO', ping: 0, time: 100 })
+    const read = readEnv(wrapper.data, ['removed:100:down'])
+
+    const output = await runMonitoring(read, { monitors: [] }, 200, 'run-removed-pending', {
+      getWorkerLocation: async () => 'SFO',
+    })
+
+    expect(output.state.monitoringStartedAt.removed).toBe(10)
+    expect(output.state.incident.removed.downEventKey).toEqual(['removed:100:down'])
+    expect(output.state.latency.removed).toBeDefined()
+    const outboxQuery = read.UPTIME_WORKER_D1.prepare.mock.calls
+      .map(([sql]: [string]) => sql)
+      .find((sql: string) => sql.includes('notification_outbox'))
+    expect(outboxQuery).toMatch(/monitor_ranges[\s\S]*event_key >= lower_bound[\s\S]*event_key < upper_bound/i)
+    expect(outboxQuery).toMatch(/LIMIT \?/i)
+  })
+
+  it('prunes all removed-monitor state only after its pending dependencies are gone', async () => {
+    const state = emptyState()
+    state.monitoringStartedAt.removed = 10
+    state.incident.removed = {
+      id: ['removed:100'],
+      startedAt: [100],
+      resolvedAt: [130],
+      changes: [[{
+        at: 100,
+        internalError: 'Connection: refused',
+        publicMessage: 'Connection failed',
+      }]],
+      downEventKey: ['removed:100:down'],
+      recoveryEventKey: ['removed:100:recovery'],
+      downNotifiedAt: [110],
+      recoveryNotifiedAt: [120],
+    }
+    const wrapper = new CompactedMonitorStateWrapper(JSON.stringify(state))
+    wrapper.appendLatency('removed', { loc: 'SFO', ping: 1, time: 100 })
+
+    const output = await runMonitoring(
+      readEnv(wrapper.data),
+      { monitors: [] },
+      200,
+      'run-removed-resolved',
+      { getWorkerLocation: async () => 'SFO' }
+    )
+
+    expect(output.state.monitoringStartedAt.removed).toBeUndefined()
+    expect(output.state.incident.removed).toBeUndefined()
+    expect(output.state.latency.removed).toBeUndefined()
+  })
+
+  it('checks only bounded retention candidate keys instead of loading an unrelated pending backlog', async () => {
+    const now = 100 + 91 * 24 * 60 * 60
+    const state = emptyState()
+    state.incident.api = {
+      id: ['api:100'],
+      startedAt: [100],
+      resolvedAt: [200],
+      changes: [[{
+        at: 100,
+        internalError: 'Connection: refused',
+        publicMessage: 'Connection failed',
+      }]],
+      downEventKey: ['api:100:down'],
+      recoveryEventKey: ['api:100:recovery'],
+      downNotifiedAt: [150],
+      recoveryNotifiedAt: [180],
+    }
+    const unrelated = Array.from({ length: 5_000 }, (_, index) => `other:${index}:down`)
+    const read = readEnv(state, unrelated)
+
+    const output = await runMonitoring(
+      read,
+      { monitors: [monitor('api')], notification: { webhook } },
+      now,
+      'run-targeted-retention',
+      {
+        doMonitor: async () => ({ id: 'api', location: 'SFO', status: successfulProbe(1) }),
+        getWorkerLocation: async () => 'SFO',
+      }
+    )
+
+    expect(output.state.incident.api).toBeUndefined()
+    const outboxQueries = read.UPTIME_WORKER_D1.prepare.mock.calls
+      .map(([sql]: [string]) => sql)
+      .filter((sql: string) => sql.includes('notification_outbox'))
+    expect(outboxQueries).toHaveLength(1)
+    expect(outboxQueries[0]).toMatch(/event_key IN \([?,\s]+\)[\s\S]*LIMIT \?/i)
+    expect(outboxQueries[0]).not.toMatch(/SELECT event_key FROM notification_outbox\s+WHERE status = 'pending'\s+ORDER BY/i)
+  })
+
+  it('keeps each targeted retention query within the D1 100-parameter limit', async () => {
+    const now = 10_000_000
+    const state = emptyState()
+    state.incident.api = {
+      id: [],
+      startedAt: [],
+      resolvedAt: [],
+      changes: [],
+      downEventKey: [],
+      recoveryEventKey: [],
+      downNotifiedAt: [],
+      recoveryNotifiedAt: [],
+    }
+    for (let index = 0; index < 50; index += 1) {
+      const startedAt = 100 + index
+      state.incident.api.id.push(`api:${startedAt}`)
+      state.incident.api.startedAt.push(startedAt)
+      state.incident.api.resolvedAt.push(startedAt + 1)
+      state.incident.api.changes.push([{
+        at: startedAt,
+        internalError: 'Connection: refused',
+        publicMessage: 'Connection failed',
+      }])
+      state.incident.api.downEventKey.push(`api:${startedAt}:down`)
+      state.incident.api.recoveryEventKey.push(`api:${startedAt}:recovery`)
+      state.incident.api.downNotifiedAt.push(startedAt)
+      state.incident.api.recoveryNotifiedAt.push(startedAt + 1)
+    }
+    const read = readEnv(state)
+
+    const output = await runMonitoring(
+      read,
+      { monitors: [monitor('api')], notification: { webhook } },
+      now,
+      'run-parameter-bound',
+      {
+        doMonitor: async () => ({ id: 'api', location: 'SFO', status: successfulProbe(1) }),
+        getWorkerLocation: async () => 'SFO',
+      }
+    )
+
+    const queryIndex = read.UPTIME_WORKER_D1.prepare.mock.calls
+      .findIndex(([sql]: [string]) => sql.includes('event_key IN'))
+    const boundArguments = read.UPTIME_WORKER_D1.prepare.mock.results[queryIndex]
+      .value.bind.mock.calls[0]
+    expect(boundArguments.length).toBeLessThanOrEqual(100)
+    expect(output.state.incident.api.id).toHaveLength(1)
+  })
+
+  it('fails before probing when a required pending-key lookup fails', async () => {
     const probe = vi.fn(async () => ({ id: 'api', location: 'SFO', status: successfulProbe(1) }))
+    const state = emptyState()
+    state.incident.api = {
+      id: ['api:100'],
+      startedAt: [100],
+      resolvedAt: [200],
+      changes: [[{
+        at: 100,
+        internalError: 'Connection: refused',
+        publicMessage: 'Connection failed',
+      }]],
+      downEventKey: ['api:100:down'],
+      recoveryEventKey: [null],
+      downNotifiedAt: [null],
+      recoveryNotifiedAt: [null],
+    }
 
     await expect(runMonitoring(
-      readEnv(emptyState(), [], new Error('pending lookup unavailable')),
+      readEnv(state, [], new Error('pending lookup unavailable')),
       { monitors: [monitor('api')], notification: { webhook } },
-      100,
+      100 + 91 * 24 * 60 * 60,
       'run-lookup-failure',
       { doMonitor: probe, getWorkerLocation: async () => 'SFO' }
     )).rejects.toThrow('pending lookup unavailable')
