@@ -1,6 +1,6 @@
 # Operations guide
 
-This guide uses the Worker and D1 database names currently configured in `wrangler.toml`: `uptime-worker` and `uptime_worker_d1`.
+This guide uses the Worker and D1 database names currently configured in `wrangler.jsonc`: `uptime-worker` and `uptime_worker_d1`.
 
 ## Monitor health
 
@@ -89,7 +89,7 @@ Allowed log fields are: event name; safe `monitorId`; `runId`; delivery kind; bo
 
 For a custom proxy, allowlist the proxy hostname with `checkProxyAllowedHosts`. The Worker sends only its monitor DTO using `Content-Type: application/json`, does not forward `Authorization` or `Cookie`, and rejects proxy redirects. Review proxy access logs under the same policy.
 
-`wrangler.toml` enables Workers Logs only for the allowlisted application events above, with a 1% head-sampling rate. Automatic invocation logs and traces are disabled so request metadata and trace payloads are not retained. Sampling reduces stored volume but is not a spending cap; review Cloudflare usage and the configured monitor count before changing the rate.
+`wrangler.jsonc` enables Workers Logs only for the allowlisted application events above, with a 1% head-sampling rate. Automatic invocation logs and traces are disabled so request metadata and trace payloads are not retained. Sampling reduces stored volume but is not a spending cap; review Cloudflare usage and the configured monitor count before changing the rate.
 
 ## Final release candidate — 2026-07-22
 

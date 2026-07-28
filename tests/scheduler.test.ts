@@ -1201,14 +1201,14 @@ describe('external delivery safety', () => {
 
 describe('deployment schema', () => {
   it('keeps RemoteChecker v1 and adds a distinct sqlite Scheduler migration and idempotent D1 tables', async () => {
-    const wrangler = await readFile(fileURLToPath(String(new URL('../wrangler.toml', import.meta.url))), 'utf8')
+    const wrangler = await readFile(fileURLToPath(String(new URL('../wrangler.jsonc', import.meta.url))), 'utf8')
     const initial = await readFile(fileURLToPath(String(new URL('../migrations/0001_initial.sql', import.meta.url))), 'utf8')
     const outbox = await readFile(fileURLToPath(String(new URL('../migrations/0002_notification_outbox.sql', import.meta.url))), 'utf8')
     const monitorLookup = await readFile(fileURLToPath(String(new URL('../migrations/0003_outbox_monitor_lookup.sql', import.meta.url))), 'utf8')
 
-    expect(wrangler).toMatch(/tag\s*=\s*"v1"[\s\S]*new_sqlite_classes\s*=\s*\["RemoteChecker"\]/)
-    expect(wrangler).toMatch(/name\s*=\s*"SCHEDULER_DO"[\s\S]*class_name\s*=\s*"Scheduler"/)
-    expect(wrangler).toMatch(/tag\s*=\s*"v2"[\s\S]*new_sqlite_classes\s*=\s*\["Scheduler"\]/)
+    expect(wrangler).toMatch(/"tag"\s*:\s*"v1"[\s\S]*"new_sqlite_classes"\s*:\s*\[\s*"RemoteChecker"\s*\]/)
+    expect(wrangler).toMatch(/"name"\s*:\s*"SCHEDULER_DO"[\s\S]*"class_name"\s*:\s*"Scheduler"/)
+    expect(wrangler).toMatch(/"tag"\s*:\s*"v2"[\s\S]*"new_sqlite_classes"\s*:\s*\[\s*"Scheduler"\s*\]/)
     expect(initial).toMatch(/CREATE TABLE IF NOT EXISTS uptimeflare/i)
     expect(outbox).toMatch(/CREATE TABLE IF NOT EXISTS notification_outbox/i)
     expect(outbox).toMatch(/CREATE TABLE IF NOT EXISTS monitor_runs/i)

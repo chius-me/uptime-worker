@@ -33,13 +33,13 @@ flowchart LR
 
 1. Fork this repository, clone your fork, then run `npm ci` (Node.js 22.13.0 or later).
 2. Edit `uptime.config.ts` to add your monitors and status-page metadata.
-3. Create the D1 database with `npm run d1:create`, then copy the returned database ID into the `UPTIME_WORKER_D1` binding in `wrangler.toml`. Initialize it with `npm run d1:migrate:remote`.
+3. Create the D1 database with `npm run d1:create`, then copy the returned database ID into the `UPTIME_WORKER_D1` binding in `wrangler.jsonc`. Initialize it with `npm run d1:migrate:remote`.
 4. Validate the artifact with `npm run deploy:dry-run`, then run `npm run deploy` once to create the Worker.
 5. Set every secret used by your enabled configuration (the table below lists the names) and verify `/api/health`. `npx wrangler secret put <SECRET_NAME>` updates an existing Worker, so it follows the initial deploy.
 
-For local development, create a gitignored `.dev.vars` file beside `wrangler.toml` and use only placeholders, for example `TG_BOT_TOKEN=<SECRET_VALUE>`. Then run `npm run d1:migrate:local` followed by `npm run dev`. Do not commit `.dev.vars`.
+For local development, create a gitignored `.dev.vars` file beside `wrangler.jsonc` and use only placeholders, for example `TG_BOT_TOKEN=<SECRET_VALUE>`. Then run `npm run d1:migrate:local` followed by `npm run dev`. Do not commit `.dev.vars`.
 
-To deploy a fork, make the same D1 binding and secrets in the fork's Cloudflare account. The Worker name, D1 database name, Durable Object bindings, migrations, static-assets binding, and cron trigger are defined in `wrangler.toml`; keep documentation and automation aligned with those names.
+To deploy a fork, make the same D1 binding and secrets in the fork's Cloudflare account. The Worker name, D1 database name, Durable Object bindings, migrations, static-assets binding, and cron trigger are defined in `wrangler.jsonc`; keep documentation and automation aligned with those names.
 
 ## Secrets
 
@@ -64,7 +64,7 @@ Deployments and local development apply the ordered SQL files in `migrations/`. 
 ### New install
 
 1. Create the database with `npm run d1:create`.
-2. Put the returned database ID in `wrangler.toml`.
+2. Put the returned database ID in `wrangler.jsonc`.
 3. Initialize the remote database with `npm run d1:migrate:remote`.
 4. For local development, run `npm run d1:migrate:local` to apply the same migrations locally.
 
@@ -88,7 +88,7 @@ Without `checkProxy`, a check runs from the current Worker colo and a public thr
 
 ## Security and privacy
 
-Secrets stay in Cloudflare secret storage or `.dev.vars`, never in `wrangler.toml`, source, issues, or logs. The custom proxy receives a small monitor DTO over POST; it does not receive the monitored request's `Authorization` or `Cookie` headers, and redirects are rejected.
+Secrets stay in Cloudflare secret storage or `.dev.vars`, never in `wrangler.jsonc`, source, issues, or logs. The custom proxy receives a small monitor DTO over POST; it does not receive the monitored request's `Authorization` or `Cookie` headers, and redirects are rejected.
 
 Logs use an allowlist of operational fields only: event name, `monitorId`, `runId`, status/boolean values, duration, ping, location/measurement identifiers, webhook host and method, and error category. They must not include webhook URLs, tokens, request headers, bodies, target URLs when sensitive, or external heartbeat URLs.
 
