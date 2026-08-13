@@ -268,15 +268,15 @@ describe('Worker runtime integration', () => {
     })
   })
 
-  it('serializes duplicate scheduled events through the Scheduler Durable Object', async () => {
+  it('serializes duplicate scheduled events without creating per-run history', async () => {
     configureEmptyScheduledRun()
 
     await Promise.all([runScheduled(1_000), runScheduled(1_001)])
 
-    const runs = await testEnv.UPTIME_WORKER_D1.prepare(
-      'SELECT COUNT(*) AS count FROM monitor_runs'
+    const states = await testEnv.UPTIME_WORKER_D1.prepare(
+      "SELECT COUNT(*) AS count FROM uptimeflare WHERE key = 'state'"
     ).first<{ count: number }>()
-    expect(runs?.count).toBe(1)
+    expect(states?.count).toBe(1)
   })
 
   it('keeps a monitoring run atomic when the D1 state write fails', async () => {
@@ -286,7 +286,13 @@ describe('Worker runtime integration', () => {
 
     await expect(persistRun(testEnv, {
       state: new CompactedMonitorStateWrapper(null).data,
-      events: [],
+      events: [{
+        eventKey: 'state-write-failure:down',
+        incidentId: 'state-write-failure',
+        monitorId: 'test',
+        kind: 'down',
+        payload: { startedAt: 1_000, checkedAt: 1_000, publicMessage: 'Connection failed' },
+      }],
       callbacks: [],
       summary: {
         runId: 'state-write-failure',
@@ -299,10 +305,10 @@ describe('Worker runtime integration', () => {
       },
     })).rejects.toThrow()
 
-    const runs = await testEnv.UPTIME_WORKER_D1.prepare(
-      'SELECT COUNT(*) AS count FROM monitor_runs'
+    const outbox = await testEnv.UPTIME_WORKER_D1.prepare(
+      'SELECT COUNT(*) AS count FROM notification_outbox'
     ).first<{ count: number }>()
-    expect(runs?.count).toBe(0)
+    expect(outbox?.count).toBe(0)
   })
 
   it('records a retryable outbox failure in D1 when delivery has no usable webhook', async () => {

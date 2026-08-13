@@ -21,16 +21,3 @@ CREATE INDEX IF NOT EXISTS notification_outbox_delivered
 
 CREATE INDEX IF NOT EXISTS notification_outbox_pending_monitor
   ON notification_outbox (status, event_key);
-
-CREATE TABLE IF NOT EXISTS monitor_runs (
-  run_id TEXT PRIMARY KEY,
-  scheduled_at INTEGER NOT NULL,
-  completed_at INTEGER NOT NULL,
-  total INTEGER NOT NULL,
-  succeeded INTEGER NOT NULL,
-  failed INTEGER NOT NULL,
-  duration_ms INTEGER NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS monitor_runs_completed
-  ON monitor_runs (completed_at, run_id);

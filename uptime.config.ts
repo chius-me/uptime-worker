@@ -30,7 +30,10 @@ const workerConfig: WorkerConfig = {
       method: 'TCP_PING',
       target: '<HOMELAB_HOST>:<HOMELAB_PORT>',
       tooltip: 'HomeLab IPv6 connectivity',
+      checkProxy: 'worker://enam',
       timeout: 10000,
+      retries: 1,
+      failureThreshold: 2,
     },
     {
       id: 'vps1',

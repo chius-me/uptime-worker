@@ -31,8 +31,8 @@
   "d1_databases": [
     {
       "binding": "UPTIME_WORKER_D1",
-      "database_name": "uptime_worker_d1",
-      "database_id": "97bbb9eb-3d04-4d5e-b66f-918483619a0c"
+      "database_name": "uptime-worker-d1",
+      "database_id": "0ea0b892-fc60-4d71-b16f-04481139d934"
     }
   ],
 

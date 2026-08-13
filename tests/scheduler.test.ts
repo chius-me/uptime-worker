@@ -242,7 +242,7 @@ describe('Scheduler', () => {
       {} as ExecutionContext
     )
 
-    expect(idFromName).toHaveBeenCalledWith('singleton')
+    expect(idFromName).toHaveBeenCalledWith('scheduler-v2')
     expect(get).toHaveBeenCalledWith('singleton-id')
     expect(run).toHaveBeenCalledWith(123_000)
   })
@@ -1098,7 +1098,7 @@ describe('callback delivery', () => {
 })
 
 describe('D1 retention cleanup', () => {
-  it('deletes only bounded 90-day-old run summaries and delivered outbox rows', async () => {
+  it('deletes only bounded 90-day-old delivered outbox rows', async () => {
     const statements: Array<{ sql: string; args: unknown[] }> = []
     const batch = vi.fn(async () => [])
     const env = {
@@ -1118,12 +1118,10 @@ describe('D1 retention cleanup', () => {
     await cleanupD1Retention(env, 100 + 90 * 24 * 60 * 60)
 
     expect(batch).toHaveBeenCalledOnce()
-    expect(statements).toHaveLength(2)
-    expect(statements[0].sql).toMatch(/DELETE FROM monitor_runs[\s\S]*LIMIT 1000/i)
-    expect(statements[1].sql).toMatch(/DELETE FROM notification_outbox[\s\S]*status = 'delivered'[\s\S]*LIMIT 1000/i)
-    expect(statements[1].sql).toMatch(/NOT EXISTS[\s\S]*status = 'pending'/i)
+    expect(statements).toHaveLength(1)
+    expect(statements[0].sql).toMatch(/DELETE FROM notification_outbox[\s\S]*status = 'delivered'[\s\S]*LIMIT 1000/i)
+    expect(statements[0].sql).toMatch(/NOT EXISTS[\s\S]*status = 'pending'/i)
     expect(statements[0].args).toEqual([100])
-    expect(statements[1].args).toEqual([100])
   })
 
   it('logs a fixed category and resolves when cleanup fails', async () => {
@@ -1205,6 +1203,7 @@ describe('deployment schema', () => {
     const initial = await readFile(fileURLToPath(String(new URL('../migrations/0001_initial.sql', import.meta.url))), 'utf8')
     const outbox = await readFile(fileURLToPath(String(new URL('../migrations/0002_notification_outbox.sql', import.meta.url))), 'utf8')
     const monitorLookup = await readFile(fileURLToPath(String(new URL('../migrations/0003_outbox_monitor_lookup.sql', import.meta.url))), 'utf8')
+    const removeRunHistory = await readFile(fileURLToPath(String(new URL('../migrations/0004_remove_monitor_runs.sql', import.meta.url))), 'utf8')
 
     expect(wrangler).toMatch(/"tag"\s*:\s*"v1"[\s\S]*"new_sqlite_classes"\s*:\s*\[\s*"RemoteChecker"\s*\]/)
     expect(wrangler).toMatch(/"name"\s*:\s*"SCHEDULER_DO"[\s\S]*"class_name"\s*:\s*"Scheduler"/)
@@ -1218,11 +1217,12 @@ describe('deployment schema', () => {
     expect(monitorLookup).toMatch(
       /CREATE INDEX IF NOT EXISTS notification_outbox_pending_monitor[\s\S]*status\s*,\s*event_key/i
     )
+    expect(removeRunHistory).toMatch(/DROP TABLE IF EXISTS monitor_runs/i)
 
     const compatibility = await readFile(fileURLToPath(String(new URL('../deploy/init.sql', import.meta.url))), 'utf8')
     expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_due/i)
     expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_delivered/i)
-    expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS monitor_runs_completed/i)
+    expect(compatibility).not.toMatch(/monitor_runs/i)
     expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_pending_monitor/i)
   })
 
@@ -1236,16 +1236,16 @@ describe('deployment schema', () => {
     expect(workflow).toMatch(/npm run d1:migrate:remote/)
     expect(workflow).not.toMatch(/wrangler d1 execute[\s\S]*deploy\/init\.sql/)
     expect(packageJson.scripts['d1:migrate:local']).toBe(
-      'wrangler d1 migrations apply uptime_worker_d1 --local'
+      'wrangler d1 migrations apply uptime-worker-d1 --local'
     )
     expect(packageJson.scripts['d1:migrate:remote']).toBe(
-      'wrangler d1 migrations apply uptime_worker_d1 --remote'
+      'wrangler d1 migrations apply uptime-worker-d1 --remote'
     )
     expect(packageJson.scripts['d1:init']).toBeUndefined()
     expect(packageJson.scripts['d1:migrate']).toBeUndefined()
     expect(readme).toMatch(/new install/i)
     expect(readme).toMatch(/compatibility install/i)
     expect(readme).toContain('deploy/init.sql')
-    expect(readme).toContain('wrangler d1 migrations apply uptime_worker_d1 --remote')
+    expect(readme).toContain('wrangler d1 migrations apply uptime-worker-d1 --remote')
   })
 })

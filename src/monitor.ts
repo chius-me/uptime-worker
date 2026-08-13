@@ -42,6 +42,8 @@ type ProbeDependencies = {
 type CheckFailure = { internalError: string }
 
 const DEFAULT_TIMEOUT = 10_000
+const PROXY_RPC_GRACE_MS = 2_000
+const MAX_RETRIES = 3
 
 function isCredentialHeader(header: string): boolean {
   const compact = header.toLowerCase().replace(/[^a-z0-9]/g, '')
@@ -447,6 +449,26 @@ async function customProxyMonitor(monitor: MonitorTarget, allowedHosts?: string[
   )
 }
 
+async function runWithRetries<T extends { status: ProbeStatus }>(
+  monitor: MonitorTarget,
+  operation: () => Promise<T>
+): Promise<T> {
+  const configuredRetries = Number.isInteger(monitor.retries) ? monitor.retries! : 0
+  const retries = Math.max(0, Math.min(MAX_RETRIES, configuredRetries))
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    try {
+      const result = await operation()
+      if (result.status.up || attempt === retries) return result
+    } catch (error) {
+      if (attempt === retries) throw error
+    }
+    logEvent('monitor_retry', { monitorId: monitor.id, attempt: attempt + 1 })
+  }
+
+  throw new Error('Monitor retry loop ended unexpectedly')
+}
+
 export async function doMonitor(
   monitor: MonitorTarget,
   defaultLocation: string,
@@ -456,45 +478,45 @@ export async function doMonitor(
   let location = defaultLocation
   let status: ProbeStatus
 
-  if (!monitor.checkProxy) {
-    status = await getStatus(monitor)
-  } else {
-    try {
+  try {
+    const result = await runWithRetries(monitor, async () => {
+      if (!monitor.checkProxy) {
+        return { location: defaultLocation, status: await getStatus(monitor) }
+      }
+
       logEvent('proxy_check_started', { monitorId: monitor.id })
       if (monitor.checkProxy.startsWith('worker://')) {
         const doLoc = monitor.checkProxy.slice('worker://'.length)
+        location = doLoc.toUpperCase()
         const doId = env.REMOTE_CHECKER_DO.idFromName(remoteCheckerName(monitor.id, doLoc))
         const doStub = env.REMOTE_CHECKER_DO.get(doId, { locationHint: doLoc as DurableObjectLocationHint })
         const remote = await withTimeout(
-          monitor.timeout ?? DEFAULT_TIMEOUT,
+          (monitor.timeout ?? DEFAULT_TIMEOUT) + PROXY_RPC_GRACE_MS,
           doStub.getLocationAndStatus(monitor)
         )
         const parsed = parseProxyResult(remote)
-        location = parsed.location
-        status = parsed.status
+        return { location: parsed.location, status: parsed.status }
       } else if (monitor.checkProxy.startsWith('globalping://')) {
-        const remote = await getStatusWithGlobalPing(monitor)
-        location = remote.location
-        status = remote.status
-      } else {
-        const remote = await customProxyMonitor(monitor, options.allowedHosts)
-        location = remote.location
-        status = remote.status
+        return getStatusWithGlobalPing(monitor)
       }
-    } catch (error) {
-      logEvent('proxy_check_failed', { monitorId: monitor.id })
-      if (monitor.checkProxyFallback) {
-        logEvent('proxy_check_fallback', { monitorId: monitor.id })
-        status = await getStatus(monitor)
-      } else {
-        const timedOut = isTimeout(error)
-        status = failedProbe(
-          timedOut
-            ? timeoutDiagnostic(error, 'Check proxy deadline exceeded')
-            : connectionDiagnostic(error, 'Check proxy error'),
-          timedOut ? monitor.timeout ?? DEFAULT_TIMEOUT : 0
-        )
-      }
+
+      return customProxyMonitor(monitor, options.allowedHosts)
+    })
+    location = result.location
+    status = result.status
+  } catch (error) {
+    logEvent('proxy_check_failed', { monitorId: monitor.id })
+    if (monitor.checkProxyFallback) {
+      logEvent('proxy_check_fallback', { monitorId: monitor.id })
+      status = await getStatus(monitor)
+    } else {
+      const timedOut = isTimeout(error)
+      status = failedProbe(
+        timedOut
+          ? timeoutDiagnostic(error, 'Check proxy deadline exceeded')
+          : connectionDiagnostic(error, 'Check proxy error'),
+        timedOut ? monitor.timeout ?? DEFAULT_TIMEOUT : 0
+      )
     }
   }
 

@@ -13,7 +13,7 @@ flowchart LR
   Checks --> Local["Worker colo"]
   Checks --> Remote["RemoteChecker Durable Object\nlocation hint"]
   Checks --> Globalping["Globalping measurement"]
-  Scheduler --> D1[("D1\nstate, runs, outbox")]
+  Scheduler --> D1[("D1\nstate and outbox")]
   Scheduler --> Delivery["Webhook dispatcher"]
   Delivery --> Webhook["Notification endpoint"]
   Scheduler --> Heartbeat["HEARTBEAT_URL\nexternal dead-man's switch"]
@@ -25,7 +25,7 @@ flowchart LR
 
 - A static status page with `/api/data`, badges, and `/api/health`.
 - A singleton Scheduler Durable Object prevents overlapping scheduled runs.
-- D1 stores state, run records, and a durable notification outbox; deliveries are **at-least-once**.
+- D1 stores current state and a durable notification outbox; deliveries are **at-least-once**.
 - Local Worker, Durable Object location-hint, Globalping, and allowlisted custom-proxy checks.
 - An optional external heartbeat reports that the monitor itself completed a run.
 
@@ -70,7 +70,7 @@ Deployments and local development apply the ordered SQL files in `migrations/`. 
 
 ### Compatibility install
 
-For an existing installation that was initialized from `deploy/init.sql`, keep the existing database and its ID. Run `wrangler d1 migrations apply uptime_worker_d1 --remote` once before the next deployment. The migrations use idempotent `CREATE ... IF NOT EXISTS` statements, so this records the migration history without replacing existing tables or data.
+For an existing installation that was initialized from `deploy/init.sql`, keep the existing database and its ID. Run `wrangler d1 migrations apply uptime-worker-d1 --remote` once before the next deployment. Back up an existing database before applying migrations: migration `0004` removes the unused per-run history table to avoid minute-level D1 write amplification.
 
 `deploy/init.sql` remains only as a compatibility schema snapshot for legacy/manual recovery. CI and package scripts use D1 migrations, and future schema changes belong in `migrations/`.
 
@@ -83,6 +83,8 @@ Use `/api/health` for a second, direct health signal. It returns HTTP 200 only w
 ## Check locations
 
 Without `checkProxy`, a check runs from the current Worker colo and a public three-letter colo value may be displayed. `worker://LOCATION_HINT` routes the check through a RemoteChecker Durable Object named from the monitor ID and hint; the hint influences Durable Object placement but does not promise a specific city, and the location shown is the colo observed by that Worker invocation.
+
+Set `retries` to repeat a failed probe within the same scheduled run. Set `failureThreshold` to the number of consecutive failed scheduled runs required before the public API and status page report the monitor as down; incidents are still retained from the first failed run for diagnostics and uptime history.
 
 `globalping://TOKEN?magic=LOCATION` submits a Globalping measurement. Its public location is the result's `country/city`, not a Cloudflare colo. Custom HTTP(S) proxy locations are intentionally never exposed in the public API. A custom proxy must set `checkProxyAllowedHosts` to its hostname; see `uptime.config.ts` for the safe example.
 

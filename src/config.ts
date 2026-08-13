@@ -3,6 +3,8 @@ import type { WebhookConfig, WorkerConfig } from '../types/config'
 const PLACEHOLDER = /<([A-Z0-9_]+)>/g
 const MIN_TIMEOUT = 1
 const MAX_TIMEOUT = 30000
+const MAX_RETRIES = 3
+const MAX_FAILURE_THRESHOLD = 10
 const PROXY_PROTOCOLS = new Set(['http:', 'https:', 'worker:', 'globalping:'])
 // Monitor IDs are safe opaque log identifiers: 1–64 alphanumeric, underscore, or hyphen characters.
 const SAFE_MONITOR_ID = /^[A-Za-z0-9_-]{1,64}$/
@@ -31,6 +33,12 @@ export function resolveConfigValue<T>(value: T, env: Record<string, unknown>, pa
 function validateTimeout(timeout: number | undefined, path: string) {
   if (timeout !== undefined && (!Number.isInteger(timeout) || timeout < MIN_TIMEOUT || timeout > MAX_TIMEOUT)) {
     throw new Error(`Invalid timeout at ${path}`)
+  }
+}
+
+function validateIntegerRange(value: number | undefined, minimum: number, maximum: number, path: string) {
+  if (value !== undefined && (!Number.isInteger(value) || value < minimum || value > maximum)) {
+    throw new Error(`Invalid value at ${path}`)
   }
 }
 
@@ -94,6 +102,13 @@ export function validateAndResolveConfig(
     }
     monitorIds.add(monitor.id)
     validateTimeout(monitor.timeout, `monitors[${index}].timeout`)
+    validateIntegerRange(monitor.retries, 0, MAX_RETRIES, `monitors[${index}].retries`)
+    validateIntegerRange(
+      monitor.failureThreshold,
+      1,
+      MAX_FAILURE_THRESHOLD,
+      `monitors[${index}].failureThreshold`
+    )
 
     if (monitor.checkProxy !== undefined) {
       let proxyUrl: URL

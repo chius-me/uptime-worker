@@ -311,6 +311,42 @@ describe('status page monitoring state', () => {
     dom.window.close()
   })
 
+  it('refreshes immediately when a background tab becomes visible again', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-22T00:00:00.000Z'))
+    const now = Math.round(Date.now() / 1_000)
+    const payload = {
+      schemaVersion: 2,
+      up: 1,
+      down: 0,
+      updatedAt: now,
+      stale: false,
+      monitoringStatus: 'healthy',
+      monitors: { api: { up: true, latency: 42, location: 'SFO', message: 'OK' } },
+      config: { title: 'Status', links: [] },
+      monitorsConfig: [{ id: 'api', name: 'Public API', hideLatencyChart: true }],
+      maintenances: [],
+      state: { monitoringStartedAt: { api: now - 3_600 }, incident: { api: [] }, latency: {} },
+    }
+    const recoveredPayload = { ...payload, updatedAt: now + 240 }
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => payload })
+      .mockResolvedValueOnce({ ok: true, json: async () => recoveredPayload })
+    const { dom } = await loadDomApp(appShell, fetchImpl)
+
+    dom.window.document.dispatchEvent(new dom.window.Event('DOMContentLoaded'))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+
+    Object.defineProperty(dom.window.document, 'hidden', { configurable: true, value: false })
+    dom.window.document.dispatchEvent(new dom.window.Event('visibilitychange'))
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    expect(dom.window.document.body.textContent).toContain('All systems operational')
+    dom.window.close()
+  })
+
   it('expires stalled refreshes, renders delayed at 180 seconds, and discovers recovery', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-07-22T00:00:00.000Z'))

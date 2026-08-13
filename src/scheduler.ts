@@ -708,15 +708,6 @@ export async function cleanupD1Retention(
   try {
     await env.UPTIME_WORKER_D1.batch([
       env.UPTIME_WORKER_D1.prepare(
-        `DELETE FROM monitor_runs
-         WHERE run_id IN (
-           SELECT run_id FROM monitor_runs
-           WHERE completed_at < ?
-           ORDER BY completed_at ASC
-           LIMIT 1000
-         )`
-      ).bind(cutoff),
-      env.UPTIME_WORKER_D1.prepare(
         `DELETE FROM notification_outbox
          WHERE event_key IN (
            SELECT candidate.event_key FROM notification_outbox AS candidate

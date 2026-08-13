@@ -74,7 +74,9 @@ export default {
   },
 
   async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
-    const id = env.SCHEDULER_DO.idFromName('singleton')
+    // Roll the stateless coordinator identity when infrastructure bindings change
+    // so a warm Durable Object cannot retain an environment from the prior deploy.
+    const id = env.SCHEDULER_DO.idFromName('scheduler-v2')
     await env.SCHEDULER_DO.get(id).run(event.scheduledTime)
   },
 }

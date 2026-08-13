@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { MonitorTarget } from '../types/config'
 import { doMonitor, remoteCheckerName } from '../src/monitor'
-import { parseProxyResult } from '../src/probe'
+import { failedProbe, parseProxyResult, successfulProbe } from '../src/probe'
 
 const secretMonitor: MonitorTarget = {
   id: 'api',
@@ -135,10 +135,12 @@ describe('custom and Durable Object proxies', () => {
     }, 'SJC', workerEnv)
 
     expect(idFromName).toHaveBeenCalledWith('api:apac')
-    expect(result).toMatchObject({ id: 'api', status: { up: false, publicMessage: 'Connection failed' } })
+    expect(result).toMatchObject({
+      id: 'api', location: 'APAC', status: { up: false, publicMessage: 'Connection failed' },
+    })
   })
 
-  it('bounds a Durable Object call by the monitor timeout', async () => {
+  it('gives a Durable Object enough grace to return its own timeout result', async () => {
     vi.useFakeTimers()
     const workerEnv = {
       REMOTE_CHECKER_DO: {
@@ -151,10 +153,30 @@ describe('custom and Durable Object proxies', () => {
       id: 'api', name: 'API', method: 'GET', target: 'https://service.example',
       checkProxy: 'worker://apac', timeout: 20,
     }, 'SJC', workerEnv)
-    await vi.advanceTimersByTimeAsync(20)
+    await vi.advanceTimersByTimeAsync(2_020)
 
     await expect(pending).resolves.toMatchObject({
-      id: 'api', status: { ping: 20, up: false, publicMessage: 'Timeout' },
+      id: 'api', location: 'APAC', status: { ping: 20, up: false, publicMessage: 'Timeout' },
     })
+  })
+
+  it('retries a failed remote probe once and keeps the successful colo result', async () => {
+    const getLocationAndStatus = vi.fn()
+      .mockResolvedValueOnce({ location: 'EWR', status: failedProbe('Timeout: TCP deadline', 20) })
+      .mockResolvedValueOnce({ location: 'EWR', status: successfulProbe(12) })
+    const workerEnv = {
+      REMOTE_CHECKER_DO: {
+        idFromName: vi.fn(() => ({}) as DurableObjectId),
+        get: vi.fn(() => ({ getLocationAndStatus })),
+      },
+    } as unknown as Parameters<typeof doMonitor>[2]
+
+    const result = await doMonitor({
+      id: 'api', name: 'API', method: 'GET', target: 'https://service.example',
+      checkProxy: 'worker://enam', timeout: 20, retries: 1,
+    }, 'HKG', workerEnv)
+
+    expect(getLocationAndStatus).toHaveBeenCalledTimes(2)
+    expect(result).toMatchObject({ id: 'api', location: 'EWR', status: { up: true, ping: 12 } })
   })
 })

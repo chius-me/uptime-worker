@@ -1,6 +1,6 @@
 # Operations guide
 
-This guide uses the Worker and D1 database names currently configured in `wrangler.jsonc`: `uptime-worker` and `uptime_worker_d1`.
+This guide uses the Worker and D1 database names currently configured in `wrangler.jsonc`: `uptime-worker` and `uptime-worker-d1`.
 
 ## Monitor health
 
@@ -30,8 +30,8 @@ After each command, check `/api/health` and trigger or wait for a notification t
 Before schema work, inspect the current database and export a portable recovery copy:
 
 ```sh
-npx wrangler d1 info uptime_worker_d1
-npx wrangler d1 export uptime_worker_d1 --remote --output <BACKUP_FILE>
+npx wrangler d1 info uptime-worker-d1
+npx wrangler d1 export uptime-worker-d1 --remote --output <BACKUP_FILE>
 ```
 
 Apply repository migrations with the package scripts:
@@ -41,13 +41,13 @@ npm run d1:migrate:local
 npm run d1:migrate:remote
 ```
 
-The remote script expands to `wrangler d1 migrations apply uptime_worker_d1 --remote`; migrations are ordered SQL files in `migrations/`. Do not use `deploy/init.sql` for normal deployments. For an existing legacy database initialized from that snapshot, apply the migrations once; their idempotent creation statements record migration history without replacing existing tables or data.
+The remote script expands to `wrangler d1 migrations apply uptime-worker-d1 --remote`; migrations are ordered SQL files in `migrations/`. Do not use `deploy/init.sql` for normal deployments. Back up an existing database first because migration `0004` removes the unused per-run history table.
 
-D1 Time Travel is always on for production storage. Confirm the backend with `npx wrangler d1 info uptime_worker_d1`; use Time Travel only after recording the intended recovery point:
+D1 Time Travel is always on for production storage. Confirm the backend with `npx wrangler d1 info uptime-worker-d1`; use Time Travel only after recording the intended recovery point:
 
 ```sh
-npx wrangler d1 time-travel info uptime_worker_d1 --timestamp=<RFC3339_TIMESTAMP>
-npx wrangler d1 time-travel restore uptime_worker_d1 --timestamp=<RFC3339_TIMESTAMP>
+npx wrangler d1 time-travel info uptime-worker-d1 --timestamp=<RFC3339_TIMESTAMP>
+npx wrangler d1 time-travel restore uptime-worker-d1 --timestamp=<RFC3339_TIMESTAMP>
 ```
 
 Restore is destructive: it overwrites the database in place and cancels in-flight queries and transactions. Treat the export and Time Travel bookmark as recovery controls, get approval, and verify state after recovery. See Cloudflare's [D1 Time Travel documentation](https://developers.cloudflare.com/d1/reference/time-travel/) for retention and production-storage prerequisites.
@@ -78,7 +78,7 @@ The outbox is the durability boundary for notifications. State, run metadata, an
 Inspect pending work without exposing payloads or webhook credentials:
 
 ```sh
-npx wrangler d1 execute uptime_worker_d1 --remote --command "SELECT event_key, status, attempts, next_attempt_at, last_error_code FROM notification_outbox WHERE status = 'pending' ORDER BY next_attempt_at ASC, event_key ASC;"
+npx wrangler d1 execute uptime-worker-d1 --remote --command "SELECT event_key, status, attempts, next_attempt_at, last_error_code FROM notification_outbox WHERE status = 'pending' ORDER BY next_attempt_at ASC, event_key ASC;"
 ```
 
 Do not manually mark an event delivered until you have confirmed the receiver's idempotent processing. Rows may be terminalized when their related monitor/incident no longer exists or their payload is invalid; inspect logs and state before taking corrective action.
@@ -117,7 +117,7 @@ No production action was performed. No remote D1 inspection, export, migration, 
 - [ ] Migration gate: confirm every migration is forward-compatible with the recorded rollback version, then apply the reviewed remote migrations once. Stop on any unexpected schema or data result.
 - [ ] Deploy the one reviewed artifact once and record its Worker version and artifact digest. Do not rebuild between the observation gates below.
 - [ ] Observation gate 1 — status and security, at least 30 minutes: verify log redaction, sampled application-log availability, stale/unknown API and UI behavior, badge 404 behavior, protected assets, security headers, `/api/health`, API errors, and configured monitor states.
-- [ ] Observation gate 2 — scheduler and delivery, at least two additional hours: verify isolated probe failures, `monitor_runs`, Outbox pending/delivery behavior, notification deduplication, and external heartbeat delivery. Continue only if gate 1 remained clean.
+- [ ] Observation gate 2 — scheduler and delivery, at least two additional hours: verify isolated probe failures, Outbox pending/delivery behavior, notification deduplication, and external heartbeat delivery. Continue only if gate 1 remained clean.
 - [ ] Observation gate 3 — presentation and accessibility: verify all five languages, incident history, timezone/DST display, keyboard and reduced-motion behavior, and the external dead-man's-switch monitor. Continue only if gates 1 and 2 remained clean.
 - [ ] Production acceptance: trigger one approved test monitor through DOWN, grace, and UP; confirm exactly one down event key and one recovery event key. Stop cron long enough to confirm `Monitoring delayed` after 181 seconds, then restore cron and confirm healthy status within one run. Review any retained sampled application events for the documented allowlisted schema; the absence of a sampled event is inconclusive and must not be treated as proof of redaction.
 

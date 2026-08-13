@@ -10,7 +10,7 @@ export default defineConfig({
       {
         test: {
           name: 'unit',
-          exclude: ['node_modules/**', 'tests/worker.integration.test.ts'],
+          exclude: ['node_modules/**', '.worktrees/**', 'tests/worker.integration.test.ts'],
         },
       },
       {
@@ -28,7 +28,7 @@ export default defineConfig({
         test: {
           name: 'worker-integration',
           include: ['tests/worker.integration.test.ts'],
-          exclude: ['node_modules/**'],
+          exclude: ['node_modules/**', '.worktrees/**'],
         },
       },
     ],

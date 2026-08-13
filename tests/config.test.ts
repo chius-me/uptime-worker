@@ -73,6 +73,20 @@ describe('runtime configuration resolution', () => {
     expect(() => validateAndResolveConfig(webhookConfig, {})).toThrow('Invalid timeout at notification.webhook.timeout')
   })
 
+  it('rejects retry and public failure thresholds outside their bounded ranges', () => {
+    const retries = {
+      monitors: [{ id: 'api', name: 'API', method: 'GET', target: 'https://api.example', retries: 4 }],
+    }
+    const threshold = {
+      monitors: [{ id: 'api', name: 'API', method: 'GET', target: 'https://api.example', failureThreshold: 0 }],
+    }
+
+    expect(() => validateAndResolveConfig(retries, {})).toThrow('Invalid value at monitors[0].retries')
+    expect(() => validateAndResolveConfig(threshold, {})).toThrow(
+      'Invalid value at monitors[0].failureThreshold'
+    )
+  })
+
   it('rejects unsupported proxy protocols and non-HTTPS webhook URLs', () => {
     const proxyConfig = {
       monitors: [{ id: 'api', name: 'API', method: 'GET', target: 'https://api.example', checkProxy: 'ftp://proxy.example' }],

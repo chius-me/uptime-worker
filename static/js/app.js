@@ -776,15 +776,17 @@ function setupThemeToggle() {
 
 // ── Auto-refresh ─────────────────────────────────
 let refreshTimer = null
+async function refreshVisiblePage() {
+  if (document.hidden) return
+  await fetchStatus()
+  if (apiData && renderStateKey(apiData) !== lastRenderedState) {
+    render()
+  }
+}
+
 function startAutoRefresh() {
   if (refreshTimer) clearInterval(refreshTimer)
-  refreshTimer = setInterval(async () => {
-    if (document.hidden) return
-    await fetchStatus()
-    if (apiData && renderStateKey(apiData) !== lastRenderedState) {
-      render()
-    }
-  }, 60000)
+  refreshTimer = setInterval(refreshVisiblePage, 60000)
 }
 
 // ── Resize ────────────────────────────────────────
@@ -815,5 +817,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   } else {
     main.innerHTML = `<div class="empty-state">${esc(I18N.t('No data available'))}</div>`
   }
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) void refreshVisiblePage()
+  })
   startAutoRefresh()
 })

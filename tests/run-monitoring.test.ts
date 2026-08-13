@@ -570,7 +570,7 @@ describe('runMonitoring', () => {
 })
 
 describe('persistRun', () => {
-  it('writes state, run summary, and secret-free unique outbox rows in one D1 batch', async () => {
+  it('writes state and secret-free unique outbox rows without per-run history', async () => {
     const prepared: Array<{ sql: string; args: unknown[] }> = []
     const batch = vi.fn(async (_statements: unknown[]) => [])
     const env = {
@@ -610,11 +610,11 @@ describe('persistRun', () => {
     await persistRun(env, output)
 
     expect(batch).toHaveBeenCalledOnce()
-    expect(batch.mock.calls[0][0]).toHaveLength(4)
+    expect(batch.mock.calls[0][0]).toHaveLength(3)
     expect(prepared[0].sql).toContain('ON CONFLICT(key) DO UPDATE')
-    expect(prepared[1].sql).toContain('monitor_runs')
-    expect(prepared[2].sql).toContain('ON CONFLICT(event_key) DO NOTHING')
-    const payload = JSON.parse(String(prepared[2].args[1]))
+    expect(prepared[1].sql).toContain('ON CONFLICT(event_key) DO NOTHING')
+    expect(prepared.map(({ sql }) => sql).join('\n')).not.toContain('monitor_runs')
+    const payload = JSON.parse(String(prepared[1].args[1]))
     expect(payload).toEqual({
       eventKey: 'api:100:down',
       incidentId: 'api:100',

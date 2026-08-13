@@ -97,6 +97,41 @@ describe('public status API contracts', () => {
     expect(payload).toMatchObject({ up: 1, down: 0, monitoringStatus: 'healthy' })
   })
 
+  it('requires the configured number of consecutive failures before reporting down', () => {
+    const firstFailure = buildDataPayload(
+      {
+        ...emptyState,
+        lastUpdate: 1_000,
+        incident: { homelab: [{ start: [1_000], end: null, error: ['Timeout'] }] },
+        latency: { homelab: [{ time: 1_000, ping: 10_000, loc: 'ENAM' }] },
+      },
+      [{ ...monitor('homelab'), checkProxy: 'worker://enam', failureThreshold: 2 }],
+      page,
+      1_010
+    )
+    const secondFailure = buildDataPayload(
+      {
+        ...emptyState,
+        lastUpdate: 1_060,
+        incident: { homelab: [{ start: [1_000], end: null, error: ['Timeout'] }] },
+        latency: {
+          homelab: [
+            { time: 1_000, ping: 10_000, loc: 'ENAM' },
+            { time: 1_060, ping: 10_000, loc: 'ENAM' },
+          ],
+        },
+      },
+      [{ ...monitor('homelab'), checkProxy: 'worker://enam', failureThreshold: 2 }],
+      page,
+      1_070
+    )
+
+    expect(firstFailure).toMatchObject({ up: 1, down: 0 })
+    expect(firstFailure.monitors.homelab).toMatchObject({ up: true, message: 'OK', location: 'ENAM' })
+    expect(secondFailure).toMatchObject({ up: 0, down: 1 })
+    expect(secondFailure.monitors.homelab).toMatchObject({ up: false, message: 'Timeout', location: 'ENAM' })
+  })
+
   it('makes the overall status initializing when any configured monitor is unknown', () => {
     const payload = buildDataPayload(
       {
@@ -209,6 +244,23 @@ describe('public status API contracts', () => {
     expect(payload.state.latency.local[0].loc).toBe('SFO')
     expect(payload.monitors.worker.location).toBeNull()
     expect(payload.state.latency.worker[0].loc).toBeNull()
+  })
+
+  it('exposes a bounded worker region hint when the remote RPC itself times out', () => {
+    const payload = buildDataPayload(
+      {
+        ...emptyState,
+        lastUpdate: 1_000,
+        incident: { worker: [{ start: [1_000], end: null, error: ['Timeout'] }] },
+        latency: { worker: [{ time: 1_000, ping: 10_000, loc: 'ENAM' }] },
+      },
+      [{ ...monitor('worker'), checkProxy: 'worker://enam' }],
+      page,
+      1_010
+    )
+
+    expect(payload.monitors.worker.location).toBe('ENAM')
+    expect(payload.state.latency.worker[0].loc).toBe('ENAM')
   })
 
   it('exposes bounded Globalping country/city locations only', () => {

@@ -425,20 +425,6 @@ export async function persistRun(env: Env, output: RunOutput): Promise<void> {
     env.UPTIME_WORKER_D1.prepare(
       'INSERT INTO uptimeflare (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
     ).bind('state', state),
-    env.UPTIME_WORKER_D1.prepare(
-      `INSERT INTO monitor_runs
-        (run_id, scheduled_at, completed_at, total, succeeded, failed, duration_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(run_id) DO NOTHING`
-    ).bind(
-      output.summary.runId,
-      output.summary.scheduledAt,
-      output.summary.completedAt,
-      output.summary.total,
-      output.summary.succeeded,
-      output.summary.failed,
-      output.summary.durationMs
-    ),
   ]
 
   for (const event of output.events) {

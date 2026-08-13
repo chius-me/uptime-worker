@@ -36,7 +36,7 @@ describe('deployment documentation', () => {
     expect(operations).toContain('/api/health')
     expect(operations).toContain('180 seconds')
     expect(operations).toContain('at-least-once')
-    expect(operations).toContain('wrangler d1 migrations apply uptime_worker_d1 --remote')
+    expect(operations).toContain('wrangler d1 migrations apply uptime-worker-d1 --remote')
     expect(operations).toContain("WHERE status = 'pending'")
     expect(operations).toContain('Absent state is `initializing`')
     expect(operations).toContain('Corrupt or unreadable state returns HTTP 503')

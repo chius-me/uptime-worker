@@ -20,6 +20,9 @@ import {
 
 const STALE_AFTER_SECONDS = 180
 const globalpingLocationPart = /^[\p{L} '-]+$/u
+const workerRegionLocations = new Set([
+  'WNAM', 'ENAM', 'SAM', 'WEUR', 'EEUR', 'APAC', 'APAC-NE', 'APAC-SE', 'OC', 'AFR', 'ME',
+])
 
 const jsonHeaders = {
   'Content-Type': 'application/json',
@@ -146,7 +149,7 @@ export function deriveMonitoringReadiness(
 export function publicLocation(location: string, monitor: MonitorTarget): string | null {
   const proxy = monitor.checkProxy
   if (!proxy || proxy.startsWith('worker://')) {
-    return /^[A-Z]{3}$/.test(location) ? location : null
+    return /^[A-Z]{3}$/.test(location) || workerRegionLocations.has(location) ? location : null
   }
   if (proxy.startsWith('globalping://')) {
     const parts = location.split('/')
@@ -189,7 +192,11 @@ function summaryForMonitor(
     return { up: null, latency: null, location: null, message: 'Not checked yet' }
   }
 
-  const up = !lastIncident || lastIncident.end !== null
+  const failureThreshold = monitor.failureThreshold ?? 1
+  const failureSamples = lastIncident?.end === null
+    ? latencies.filter(({ time }) => time >= (lastIncident.start[0] ?? Number.POSITIVE_INFINITY)).length
+    : 0
+  const up = !lastIncident || lastIncident.end !== null || failureSamples < failureThreshold
   return {
     up,
     latency: lastLatency.ping,

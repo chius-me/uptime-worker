@@ -14,9 +14,9 @@
     "typecheck": "tsc --noEmit",
     "check": "npm test && npm run typecheck",
     "deploy:dry-run": "wrangler deploy --dry-run",
-    "d1:create": "wrangler d1 create uptime_worker_d1",
-    "d1:migrate:local": "wrangler d1 migrations apply uptime_worker_d1 --local",
-    "d1:migrate:remote": "wrangler d1 migrations apply uptime_worker_d1 --remote"
+    "d1:create": "wrangler d1 create uptime-worker-d1",
+    "d1:migrate:local": "wrangler d1 migrations apply uptime-worker-d1 --local",
+    "d1:migrate:remote": "wrangler d1 migrations apply uptime-worker-d1 --remote"
   },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.18.7",

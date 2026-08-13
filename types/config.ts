@@ -39,6 +39,8 @@ export type MonitorTarget = {
   hideLatencyChart?: boolean
   expectedCodes?: number[]
   timeout?: number
+  retries?: number
+  failureThreshold?: number
   headers?: { [key: string]: string | number }
   body?: string
   responseKeyword?: string
