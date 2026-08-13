@@ -27,6 +27,8 @@ export type PageConfigLink = {
   link: string
   label: string
   highlight?: boolean
+  position?: 'left' | 'right'
+  icon?: 'github'
 }
 
 export type MonitorTarget = {

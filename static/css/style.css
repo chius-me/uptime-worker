@@ -122,16 +122,24 @@ a:hover {
   position: sticky;
   top: 0;
   z-index: 100;
-  transition: background 0.25s;
+  transition: background-color 0.25s ease;
 }
 
 .nav-bar {
   max-width: 1048px;
   margin: 0 auto;
   padding: 14px 20px;
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
+}
+
+.nav-left {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  justify-self: start;
 }
 
 .nav-brand {
@@ -143,18 +151,23 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
 }
 
-.nav-links-container {
-  display: flex;
-  gap: 20px;
-  align-items: center;
+.nav-brand span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .nav-links {
   display: flex;
   gap: 16px;
   align-items: center;
+}
+
+.nav-links-right {
+  justify-self: end;
 }
 
 .nav-links a {
@@ -180,6 +193,26 @@ a:hover {
   opacity: 0.9;
 }
 
+.nav-links a.icon-link {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--text);
+}
+
+.nav-links a.icon-link:hover {
+  color: var(--accent);
+  background: var(--bg-muted);
+}
+
+.nav-links a.icon-link svg {
+  width: 23px;
+  height: 23px;
+}
+
 /* Theme Switcher Button */
 .theme-toggle-btn {
   background: none;
@@ -191,10 +224,10 @@ a:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s ease;
-  width: 36px;
-  height: 36px;
-  outline: none;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
+  width: 44px;
+  height: 44px;
+  justify-self: center;
 }
 .theme-toggle-btn:hover {
   background: var(--bg-muted);
@@ -740,9 +773,9 @@ details.monitor-card summary::-webkit-details-marker {
   .nav-bar {
     padding: 12px 16px;
   }
-  .nav-links-container {
-    gap: 12px;
-  }
+  .nav-left { gap: 8px; }
+  .nav-brand span { display: none; }
+  .nav-brand img { margin-right: 0 !important; }
   .nav-links {
     gap: 10px;
   }

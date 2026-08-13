@@ -31,7 +31,8 @@ type UptimeRenderers = {
 
 const appPath = fileURLToPath(String(new URL('../static/js/app.js', import.meta.url)))
 const appShell = `<!doctype html><html><body>
-  <a class="nav-brand"></a><div id="nav-links"></div><button id="theme-toggle"></button>
+  <div class="nav-left"><div id="nav-links-left"></div><a class="nav-brand"></a></div>
+  <button id="theme-toggle"></button><div id="nav-links-right"></div>
   <main id="main-content"></main><div id="footer-text"></div><div id="page-title"></div>
 </body></html>`
 
@@ -113,6 +114,44 @@ afterEach(() => {
 })
 
 describe('status page monitoring state', () => {
+  it('places an accessible GitHub icon left, theme control center, and email right', async () => {
+    vi.useFakeTimers()
+    const now = Math.round(Date.now() / 1_000)
+    const payload = {
+      schemaVersion: 2,
+      up: 1,
+      down: 0,
+      updatedAt: now,
+      stale: false,
+      monitoringStatus: 'healthy',
+      monitors: { api: { up: true, latency: 42, location: 'SFO', message: 'OK' } },
+      config: {
+        title: 'Status',
+        links: [
+          { link: 'https://github.com/chius-me/', label: 'GitHub', position: 'left', icon: 'github' },
+          { link: 'mailto:contact@chius.cc', label: 'Email Me', position: 'right', highlight: true },
+        ],
+      },
+      monitorsConfig: [{ id: 'api', name: 'API', hideLatencyChart: true }],
+      maintenances: [],
+      state: { monitoringStartedAt: { api: now - 3_600 }, incident: { api: [] }, latency: {} },
+    }
+    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, json: async () => payload })
+    const { dom } = await loadDomApp(appShell, fetchImpl)
+
+    dom.window.document.dispatchEvent(new dom.window.Event('DOMContentLoaded'))
+    await vi.advanceTimersByTimeAsync(0)
+
+    const github = dom.window.document.querySelector('#nav-links-left a')
+    const email = dom.window.document.querySelector('#nav-links-right a')
+    expect(github?.getAttribute('aria-label')).toBe('GitHub')
+    expect(github?.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
+    expect(github?.textContent).toBe('')
+    expect(email?.textContent).toBe('Email Me')
+    expect(dom.window.document.getElementById('theme-toggle')).not.toBeNull()
+    dom.window.close()
+  })
+
   it('provides monitoring-state copy in every supported locale', async () => {
     const localeFiles = ['en', 'zh-CN', 'zh-TW', 'de-DE', 'fr-FR']
     const requiredKeys = ['Monitoring initializing', 'Monitoring delayed', 'Last successful check', 'Unknown']

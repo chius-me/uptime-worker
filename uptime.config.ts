@@ -5,8 +5,8 @@ const pageConfig: PageConfig = {
   title: "Chius's Status Page",
   // Links shown at the header of your status page, could set `highlight` to `true`
   links: [
-    { link: 'https://github.com/chius-me/', label: 'GitHub' },
-    { link: 'mailto:contact@chius.cc', label: 'Email Me', highlight: true },
+    { link: 'https://github.com/chius-me/', label: 'GitHub', position: 'left', icon: 'github' },
+    { link: 'mailto:contact@chius.cc', label: 'Email Me', position: 'right', highlight: true },
   ],
   logo: '/logo.png',
 }

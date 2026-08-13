@@ -12,6 +12,7 @@ const ICONS = {
   check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>',
   alert: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>',
   triangle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+  github: '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false"><path d="M8 0C3.58 0 0 3.64 0 8.13c0 3.59 2.29 6.64 5.47 7.71.4.08.55-.18.55-.39 0-.19-.01-.83-.01-1.51-2.01.38-2.53-.5-2.69-.96-.09-.23-.48-.96-.82-1.15-.28-.15-.68-.53-.01-.54.63-.01 1.08.59 1.23.83.72 1.23 1.87.88 2.33.67.07-.53.28-.88.51-1.08-1.78-.21-3.64-.91-3.64-4.02 0-.89.31-1.62.82-2.19-.08-.21-.36-1.04.08-2.16 0 0 .67-.22 2.2.84A7.4 7.4 0 0 1 8 3.91c.68 0 1.36.09 2 .27 1.53-1.06 2.2-.84 2.2-.84.44 1.12.16 1.95.08 2.16.51.57.82 1.3.82 2.19 0 3.12-1.87 3.81-3.65 4.02.29.25.54.74.54 1.5 0 1.08-.01 1.95-.01 2.22 0 .21.15.47.55.39A8.08 8.08 0 0 0 16 8.13C16 3.64 12.42 0 8 0Z"/></svg>',
 }
 
 // ── Color ────────────────────────────────────────
@@ -83,10 +84,22 @@ async function render() {
     : esc(cfg.title || 'UptimeWorker')
 
   // Nav links
-  const nav = document.getElementById('nav-links')
-  nav.innerHTML = (cfg.links || []).map(l =>
-    `<a href="${esc(l.link)}" class="${l.highlight ? 'highlight' : ''}" target="${l.link.startsWith('http') ? '_blank' : '_self'}">${esc(l.label)}</a>`
-  ).join('\n')
+  const renderNavLink = link => {
+    const external = link.link.startsWith('http')
+    const icon = link.icon === 'github' ? ICONS.github : esc(link.label)
+    const iconClass = link.icon === 'github' ? ' icon-link github-link' : ''
+    const accessibleName = link.icon ? ` aria-label="${esc(link.label)}" title="${esc(link.label)}"` : ''
+    return `<a href="${esc(link.link)}" class="${link.highlight ? 'highlight' : ''}${iconClass}" target="${external ? '_blank' : '_self'}"${external ? ' rel="noopener noreferrer"' : ''}${accessibleName}>${icon}</a>`
+  }
+  const links = cfg.links || []
+  document.getElementById('nav-links-left').innerHTML = links
+    .filter(link => link.position === 'left')
+    .map(renderNavLink)
+    .join('\n')
+  document.getElementById('nav-links-right').innerHTML = links
+    .filter(link => link.position !== 'left')
+    .map(renderNavLink)
+    .join('\n')
 
   // Footer
   document.getElementById('footer-text').innerHTML = cfg.customFooter || 'Powered by <a href="https://github.com/chius-me/uptime-worker" target="_blank">UptimeWorker</a>. Inspired by <a href="https://github.com/lyc8503/UptimeFlare" target="_blank">UptimeFlare</a> and <a href="https://github.com/louislam/uptime-kuma" target="_blank">Uptime Kuma</a>.'
