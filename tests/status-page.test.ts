@@ -31,8 +31,9 @@ type UptimeRenderers = {
 
 const appPath = fileURLToPath(String(new URL('../static/js/app.js', import.meta.url)))
 const appShell = `<!doctype html><html><body>
-  <div id="nav-links-left"></div>
-  <button id="theme-toggle"></button><div id="nav-links-right"></div>
+  <a class="nav-brand"></a>
+  <div class="nav-controls"><div id="nav-links-left"></div>
+  <button id="theme-toggle"></button><div id="nav-links-right"></div></div>
   <main id="main-content"></main><div id="footer-text"></div><div id="page-title"></div>
 </body></html>`
 
@@ -114,7 +115,7 @@ afterEach(() => {
 })
 
 describe('status page monitoring state', () => {
-  it('places an accessible GitHub icon left, theme control center, and email right', async () => {
+  it('keeps the brand left and orders GitHub, theme, and email together on the right', async () => {
     vi.useFakeTimers()
     const now = Math.round(Date.now() / 1_000)
     const payload = {
@@ -128,7 +129,7 @@ describe('status page monitoring state', () => {
       config: {
         title: 'Status',
         links: [
-          { link: 'https://github.com/chius-me/', label: 'GitHub', position: 'left', icon: 'github' },
+          { link: 'https://github.com/chius-me/uptime-worker', label: 'GitHub', position: 'left', icon: 'github' },
           { link: 'mailto:contact@chius.cc', label: 'Email Me', position: 'right', highlight: true },
         ],
       },
@@ -144,7 +145,15 @@ describe('status page monitoring state', () => {
 
     const github = dom.window.document.querySelector('#nav-links-left a')
     const email = dom.window.document.querySelector('#nav-links-right a')
+    const controls = dom.window.document.querySelector('.nav-controls')
+    expect(dom.window.document.querySelector('.nav-brand')?.textContent).toBe('Status')
+    expect(controls ? Array.from(controls.children as ArrayLike<{ id: string }>).map(element => element.id) : []).toEqual([
+      'nav-links-left',
+      'theme-toggle',
+      'nav-links-right',
+    ])
     expect(github?.getAttribute('aria-label')).toBe('GitHub')
+    expect(github?.getAttribute('href')).toBe('https://github.com/chius-me/uptime-worker')
     expect(github?.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
     expect(github?.textContent).toBe('')
     expect(email?.textContent).toBe('Email Me')
