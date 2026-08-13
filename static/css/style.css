@@ -134,30 +134,8 @@ a:hover {
   align-items: center;
 }
 
-.nav-left {
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 12px;
+.nav-links-left {
   justify-self: start;
-}
-
-.nav-brand {
-  font-size: 1.15rem;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  color: var(--text) !important;
-  text-decoration: none !important;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.nav-brand span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .nav-links {
@@ -194,23 +172,28 @@ a:hover {
 }
 
 .nav-links a.icon-link {
+  background: none;
+  border: 1px solid var(--border);
+  padding: 8px;
   width: 44px;
   height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
-  color: var(--text);
+  color: var(--text-secondary);
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.2s ease;
 }
 
 .nav-links a.icon-link:hover {
   color: var(--accent);
   background: var(--bg-muted);
+  transform: scale(1.03);
 }
 
 .nav-links a.icon-link svg {
-  width: 23px;
-  height: 23px;
+  width: 20px;
+  height: 20px;
 }
 
 /* Theme Switcher Button */
@@ -773,9 +756,6 @@ details.monitor-card summary::-webkit-details-marker {
   .nav-bar {
     padding: 12px 16px;
   }
-  .nav-left { gap: 8px; }
-  .nav-brand span { display: none; }
-  .nav-brand img { margin-right: 0 !important; }
   .nav-links {
     gap: 10px;
   }

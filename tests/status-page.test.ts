@@ -31,7 +31,7 @@ type UptimeRenderers = {
 
 const appPath = fileURLToPath(String(new URL('../static/js/app.js', import.meta.url)))
 const appShell = `<!doctype html><html><body>
-  <div class="nav-left"><div id="nav-links-left"></div><a class="nav-brand"></a></div>
+  <div id="nav-links-left"></div>
   <button id="theme-toggle"></button><div id="nav-links-right"></div>
   <main id="main-content"></main><div id="footer-text"></div><div id="page-title"></div>
 </body></html>`
