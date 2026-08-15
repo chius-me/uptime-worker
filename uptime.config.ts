@@ -30,9 +30,10 @@ const workerConfig: WorkerConfig = {
       method: 'TCP_PING',
       target: '<HOMELAB_HOST>:<HOMELAB_PORT>',
       tooltip: 'HomeLab IPv6 connectivity',
-      checkProxy: 'worker://enam',
-      timeout: 10000,
-      retries: 1,
+      // Keep the external check near the HomeLab. ENAM routed this through EWR,
+      // where nearly half of recent TCP attempts exhausted the full timeout.
+      checkProxy: 'worker://apac',
+      timeout: 5000,
       failureThreshold: 2,
     },
     {

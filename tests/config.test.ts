@@ -1,7 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
 import { resolveConfigValue, resolvePasswordProtection, validateAndResolveConfig } from '../src/config'
+import { workerConfig } from '../uptime.config'
 
 describe('runtime configuration resolution', () => {
+  it('keeps the production HomeLab probe in APAC with a bounded failure window', () => {
+    const homelab = workerConfig.monitors.find(({ id }) => id === 'homelab')
+
+    expect(homelab).toMatchObject({
+      checkProxy: 'worker://apac',
+      timeout: 5_000,
+      failureThreshold: 2,
+    })
+    expect(homelab?.retries).toBeUndefined()
+  })
+
   it('resolves nested monitor and webhook values', () => {
     const value = { headers: { Authorization: 'Bearer <API_TOKEN>' }, body: '<BODY>' }
 

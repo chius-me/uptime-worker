@@ -242,9 +242,26 @@ describe('Scheduler', () => {
       {} as ExecutionContext
     )
 
-    expect(idFromName).toHaveBeenCalledWith('scheduler-v2')
+    expect(idFromName).toHaveBeenCalledWith('scheduler-v3')
     expect(get).toHaveBeenCalledWith('singleton-id')
     expect(run).toHaveBeenCalledWith(123_000)
+  })
+
+  it('logs an allowlisted scheduled failure without retaining the platform error', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+    const run = vi.fn(async () => { throw new Error('private platform diagnostic') })
+    const get = vi.fn(() => ({ run }))
+
+    await expect(worker.scheduled(
+      { scheduledTime: 123_000 } as ScheduledEvent,
+      { SCHEDULER_DO: { idFromName: () => 'scheduler-id', get } } as any,
+      {} as ExecutionContext
+    )).rejects.toThrow('private platform diagnostic')
+
+    const output = logSpy.mock.calls.flat().join(' ')
+    expect(output).toContain('scheduled_run_failed scheduledAt=123000')
+    expect(output).not.toContain('private platform diagnostic')
+    logSpy.mockRestore()
   })
 })
 

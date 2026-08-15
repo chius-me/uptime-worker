@@ -76,8 +76,15 @@ export default {
   async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
     // Roll the stateless coordinator identity when infrastructure bindings change
     // so a warm Durable Object cannot retain an environment from the prior deploy.
-    const id = env.SCHEDULER_DO.idFromName('scheduler-v2')
-    await env.SCHEDULER_DO.get(id).run(event.scheduledTime)
+    const id = env.SCHEDULER_DO.idFromName('scheduler-v3')
+    try {
+      await env.SCHEDULER_DO.get(id).run(event.scheduledTime)
+    } catch (error) {
+      // Keep the log schema allowlisted: the platform error may contain request
+      // metadata or binding details that must not be retained.
+      logEvent('scheduled_run_failed', { scheduledAt: event.scheduledTime })
+      throw error
+    }
   },
 }
 
