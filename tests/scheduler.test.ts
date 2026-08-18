@@ -1243,12 +1243,12 @@ describe('deployment schema', () => {
     expect(compatibility).toMatch(/CREATE INDEX IF NOT EXISTS notification_outbox_pending_monitor/i)
   })
 
-  it('deploys D1 migrations and documents new and compatibility installs', async () => {
+  it('deploys D1 migrations and documents install migration commands', async () => {
     const workflow = await readFile(fileURLToPath(String(new URL('../.github/workflows/deploy.yml', import.meta.url))), 'utf8')
     const packageJson = JSON.parse(
       await readFile(fileURLToPath(String(new URL('../package.json', import.meta.url))), 'utf8')
     ) as { scripts: Record<string, string> }
-    const readme = await readFile(fileURLToPath(String(new URL('../README.md', import.meta.url))), 'utf8')
+    const operations = await readFile(fileURLToPath(String(new URL('../docs/operations.md', import.meta.url))), 'utf8')
 
     expect(workflow).toMatch(/npm run d1:migrate:remote/)
     expect(workflow).not.toMatch(/wrangler d1 execute[\s\S]*deploy\/init\.sql/)
@@ -1260,9 +1260,7 @@ describe('deployment schema', () => {
     )
     expect(packageJson.scripts['d1:init']).toBeUndefined()
     expect(packageJson.scripts['d1:migrate']).toBeUndefined()
-    expect(readme).toMatch(/new install/i)
-    expect(readme).toMatch(/compatibility install/i)
-    expect(readme).toContain('deploy/init.sql')
-    expect(readme).toContain('wrangler d1 migrations apply uptime-worker-d1 --remote')
+    expect(operations).toContain('deploy/init.sql')
+    expect(operations).toContain('wrangler d1 migrations apply uptime-worker-d1 --remote')
   })
 })

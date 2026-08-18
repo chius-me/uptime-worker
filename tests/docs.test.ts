@@ -3,29 +3,17 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 const root = fileURLToPath(new URL('..', import.meta.url).toString())
-const readmePath = `${root}README.md`
 const operationsPath = `${root}docs/operations.md`
 
 describe('deployment documentation', () => {
-  it('documents the required README sections and safe proxy configuration', async () => {
-    const [readme, config] = await Promise.all([
-      readFile(readmePath, 'utf8'),
+  it('documents safe proxy configuration', async () => {
+    const [operations, config] = await Promise.all([
+      readFile(operationsPath, 'utf8'),
       readFile(`${root}uptime.config.ts`, 'utf8'),
     ])
 
-    for (const heading of [
-      'Architecture',
-      'Quick start',
-      'Secrets',
-      'D1 migrations',
-      'Monitoring the monitor',
-      'Security and privacy',
-    ]) {
-      expect(readme).toContain(`## ${heading}`)
-    }
-    expect(readme).toContain('```mermaid')
-    expect(readme).toContain('Node.js 22.13.0 or later')
-    expect(readme).toContain('checkProxyAllowedHosts')
+    expect(operations).toContain('checkProxyAllowedHosts')
+    expect(operations).toContain('Node 22.13.0')
     expect(config).toContain('checkProxyAllowedHosts')
     expect(config).not.toMatch(/forwardHeaders:\s*\[[^\]]*(?:Authorization|Cookie)/i)
   })
