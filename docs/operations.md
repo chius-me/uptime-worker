@@ -105,7 +105,7 @@ The worktree must be clean, the subject must be `fix: align health and release r
 
 ### Local verification record
 
-Fresh final-wave commands ran locally with Node.js 26.5.0 and npm 11.17.0. `npm run check` passed 17 test files and 201 tests, followed by `tsc --noEmit` with exit status 0. `npm run deploy:dry-run` exited 0, read 19 static assets, and reported the expected `RemoteChecker`, `Scheduler`, `UPTIME_WORKER_D1`, and `ASSETS` bindings without uploading or deploying. `npm audit --omit=dev --json` reported zero production-dependency vulnerabilities, and `git diff --check` exited 0. These are local results, not production evidence. Re-run them after checking out the recorded `RELEASE_COMMIT`; the detailed TDD and command record is `.superpowers/sdd/final-wave-d-report.md`.
+Fresh final-wave commands ran locally with Node.js 26.5.0 and npm 11.17.0. `npm run check` passed 17 test files and 201 tests, followed by `tsc --noEmit` with exit status 0. `npm run deploy:dry-run` exited 0, read 19 static assets, and reported the expected `RemoteChecker`, `Scheduler`, `UPTIME_WORKER_D1`, and `ASSETS` bindings without uploading or deploying. `npm audit --omit=dev --json` reported zero production-dependency vulnerabilities, and `git diff --check` exited 0. These are local results, not production evidence. Re-run them after checking out the recorded `RELEASE_COMMIT`.
 
 ### Production status
 
