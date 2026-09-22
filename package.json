@@ -6,7 +6,7 @@
   "engines": {
     "node": ">=22.13.0"
   },
-  "description": "Serverless uptime monitoring & status page — pure Cloudflare Workers, zero Pages",
+  "description": "Serverless uptime monitoring & status page \u2014 pure Cloudflare Workers, zero Pages",
   "scripts": {
     "dev": "wrangler dev --test-scheduled --persist-to ./.wrangler/state",
     "deploy": "wrangler deploy",
@@ -24,10 +24,13 @@
     "@types/node": "^22.20.1",
     "jsdom": "^29.1.1",
     "typescript": "^5.0.4",
-    "vitest": "^4.1.10",
-    "wrangler": "^4.124.0"
+    "vitest": "^4.1.11",
+    "wrangler": "^4.136.2"
   },
   "dependencies": {
     "p-limit": "^7.2.0"
+  },
+  "overrides": {
+    "sharp": "0.35.4"
   }
 }
