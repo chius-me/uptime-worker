@@ -12,7 +12,7 @@ The cron runs every minute. Query `https://<STATUS_HOST>/api/health` from outsid
 
 Absent state is `initializing`: it returns HTTP 503 with `monitoringStatus: "initializing"`, `updatedAt: 0`, and `stale: true`. A fresh timestamp is not sufficient for readiness: zero configured monitors, or any configured monitor without a persisted sample, also returns HTTP 503 with `monitoringStatus: "initializing"` and `stale: false`. HTTP 503 and `monitoringStatus: "delayed"` means the last state is older than 180 seconds. Corrupt or unreadable state returns HTTP 503 with `{"error":"State unavailable"}`. Alert on any non-200 response.
 
-Set `HEARTBEAT_URL` with `npx wrangler secret put HEARTBEAT_URL`. Configure Healthchecks, Better Stack, or an equivalent external dead-man's switch to expect a ping every 1 minute with a 3-minute grace period. The Worker sends the HTTPS GET only after monitoring state and run metadata have been persisted; a heartbeat proves that boundary was reached, not that monitored systems are healthy.
+Set `HEARTBEAT_URL` with `npx wrangler secret put HEARTBEAT_URL`. Configure Healthchecks, Better Stack, or an equivalent external dead-man's switch to expect a ping every 1 minute with a 3-minute grace period. The Worker sends the HTTPS GET only after monitoring state and notification events have been persisted; a heartbeat proves that boundary was reached, not that monitored systems are healthy.
 
 ## Secrets and Telegram rotation
 
@@ -73,7 +73,7 @@ Worker rollback changes the deployed Worker version only. It does **not** roll b
 
 ## Notification outbox
 
-The outbox is the durability boundary for notifications. State, run metadata, and unique notification rows are persisted together. The dispatcher retries pending rows and marks a row delivered only after webhook delivery and its confirmation write succeed. A failure after a receiver accepts a request but before confirmation can resend the same event; delivery is therefore at-least-once. Webhooks receive an `Idempotency-Key`, and receivers should deduplicate it.
+The outbox is the durability boundary for notifications. State and unique notification rows are persisted together. Per-run summaries are logged; the historical monitor_runs table was removed by migration 0004. The dispatcher retries pending rows and marks a row delivered only after webhook delivery and its confirmation write succeed. A failure after a receiver accepts a request but before confirmation can resend the same event; delivery is therefore at-least-once. Webhooks receive an `Idempotency-Key`, and receivers should deduplicate it.
 
 Inspect pending work without exposing payloads or webhook credentials:
 
@@ -91,9 +91,9 @@ For a custom proxy, allowlist the proxy hostname with `checkProxyAllowedHosts`. 
 
 `wrangler.jsonc` enables Workers Logs only for the allowlisted application events above, with a 1% head-sampling rate. Automatic invocation logs and traces are disabled so request metadata and trace payloads are not retained. Sampling reduces stored volume but is not a spending cap; review Cloudflare usage and the configured monitor count before changing the rate.
 
-## Final release candidate — 2026-07-22
+## Release verification
 
-The only release candidate is the final reviewed head that contains all remediation waves, including the final readiness fixes. Resolve and record its full immutable SHA immediately before building:
+Resolve and record the reviewed revision’s full immutable SHA immediately before building:
 
 ```sh
 RELEASE_COMMIT="$(git rev-parse HEAD)"
@@ -101,11 +101,21 @@ git status --short
 git show --no-patch --format='%H %s' "$RELEASE_COMMIT"
 ```
 
-The worktree must be clean, the subject must be `fix: align health and release readiness`, and the recorded SHA must match the reviewed final-head gate report. Build one immutable artifact from `RELEASE_COMMIT`; do not rebuild from or deploy an earlier intermediate commit. If a staged rollout truly requires different code artifacts, stop and require each artifact to be rebuilt, independently reviewed, and fully verified before it receives its own approval.
+The worktree must be clean and the recorded SHA must match the revision that was reviewed and tested. Build one immutable artifact from `RELEASE_COMMIT`; do not rebuild from or deploy an earlier intermediate commit. If a staged rollout truly requires different code artifacts, stop and require each artifact to be rebuilt, independently reviewed, and fully verified before it receives its own approval.
 
 ### Local verification record
 
-Fresh final-wave commands ran locally with Node.js 26.5.0 and npm 11.17.0. `npm run check` passed 17 test files and 201 tests, followed by `tsc --noEmit` with exit status 0. `npm run deploy:dry-run` exited 0, read 19 static assets, and reported the expected `RemoteChecker`, `Scheduler`, `UPTIME_WORKER_D1`, and `ASSETS` bindings without uploading or deploying. `npm audit --omit=dev --json` reported zero production-dependency vulnerabilities, and `git diff --check` exited 0. These are local results, not production evidence. Re-run them after checking out the recorded `RELEASE_COMMIT`.
+Run these checks with Node 22.13.0 or newer after checking out the recorded `RELEASE_COMMIT`:
+
+```sh
+npm ci
+npm run check
+npm run deploy:dry-run
+npm audit --json
+git diff --check
+```
+
+Record the actual runtime versions, test count and command results with the release. Historical test counts are not a gate for a newer revision. These are local results, not production evidence. See `repository-audit-2026-09-27.md` for the audit baseline and remediation verification.
 
 ### Production status
 
@@ -126,3 +136,20 @@ No production action was performed. No remote D1 inspection, export, migration, 
 Stop the active batch and begin rollback review if any of these occurs: `/api/health` returns 503 continuously for three minutes; all monitors become `unknown` together; Outbox pending count grows for five consecutive dispatch rounds; or API 5xx exceeds 1% during the observation window. Also stop for credential or response-body disclosure, an authentication bypass, loss of stored state, or repeated notification event keys.
 
 For a Worker-only regression with compatible data, roll back to the recorded known-good Worker version and repeat health and data checks. A Worker rollback does not revert D1 or Durable Object state. Do not reverse or restore D1 automatically; if schema/data compatibility is uncertain, stop traffic-changing work and choose an approved forward-compatible hotfix or the separately reviewed D1 recovery procedure using the recorded export or Time Travel point.
+
+
+## Probe and confirmed-status behavior
+
+HTTP probes follow at most five redirects within one total timeout. Same-origin redirects preserve configured headers. Cross-origin redirects are allowed only for requests with no body and only public `Accept`, `Accept-Language` or `User-Agent` headers. Requests carrying any other header are rejected at that boundary; HTTPS-to-HTTP redirects and URL userinfo are rejected. Configure the final URL directly for authenticated endpoints that redirect across origins. Webhook redirects are rejected, including same-origin redirects, so a 3xx cannot forward notification credentials or payloads or mark an event delivered.
+
+TCP targets must include a port from 1 to 65535 (`host:443`, `[2001:db8::1]:443`). Globalping TCP fractional RTT is rounded to integer milliseconds for storage. Truncated Globalping content returns an inconclusive result unless the returned prefix already proves the configured keyword result.
+
+`failureThreshold` counts consecutive failed monitoring runs, after any per-run retries. Candidate counts survive scheduler restarts; a successful probe clears the candidate. Once the threshold is met, the incident starts at that confirming check and the notification grace period begins there. Page summaries, badges, incident history, uptime calculations, callbacks and outbox events all use the confirmed incident. A successful probe resolves it immediately. Existing open incidents remain confirmed during upgrades; historical incidents are not rewritten. Raw latency samples still include unsuccessful candidate probes.
+
+## State storage and upgrade compatibility
+
+The Worker keeps the v2 logical state and reads existing inline v1/v2 records. Values above 512,000 UTF-8 bytes are saved losslessly as a small `state` manifest and JSON-encoded `state:chunk:*` rows in the existing `uptimeflare` table. Each encoded chunk remains below the D1 2,000,000-byte row limit, even for Unicode. This needs no new SQL migration. All state chunks, manifest updates and outbox changes use one D1 batch; readers retrieve manifest and chunks from one SQL snapshot. Missing or malformed chunks fail closed instead of silently resetting state. Shrinking back to inline state deletes obsolete chunks in the same transaction.
+
+Deploy this code before large state approaches the row limit. Once a chunk manifest has been written, older Workers that only understand inline state cannot read it: rollback must use a version with chunk support, or an explicitly planned export/conversion after verifying that the complete state fits an inline row. Do not delete chunks or discard pending notification state to make an old version start. D1 exports include all chunks; a direct SELECT of the `state` key alone is no longer a complete backup.
+
+Chunking removes the single-row ceiling; aggregate CPU, memory, response size and database capacity still scale with retained history. Review these separately before substantially increasing monitor count or retention. The 90-day retention and pending-event protection are unchanged.

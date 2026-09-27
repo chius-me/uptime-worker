@@ -97,7 +97,7 @@ describe('public status API contracts', () => {
     expect(payload).toMatchObject({ up: 1, down: 0, monitoringStatus: 'healthy' })
   })
 
-  it('requires the configured number of consecutive failures before reporting down', () => {
+  it('reports confirmed incidents without reapplying the failure threshold', () => {
     const firstFailure = buildDataPayload(
       {
         ...emptyState,
@@ -126,8 +126,8 @@ describe('public status API contracts', () => {
       1_070
     )
 
-    expect(firstFailure).toMatchObject({ up: 1, down: 0 })
-    expect(firstFailure.monitors.homelab).toMatchObject({ up: true, message: 'OK', location: 'ENAM' })
+    expect(firstFailure).toMatchObject({ up: 0, down: 1 })
+    expect(firstFailure.monitors.homelab).toMatchObject({ up: false, message: 'Timeout', location: 'ENAM' })
     expect(secondFailure).toMatchObject({ up: 0, down: 1 })
     expect(secondFailure.monitors.homelab).toMatchObject({ up: false, message: 'Timeout', location: 'ENAM' })
   })

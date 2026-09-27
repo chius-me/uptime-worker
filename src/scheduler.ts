@@ -16,7 +16,7 @@ import {
   type CallbackAction,
   type RunOutput,
 } from './run-monitoring'
-import { CompactedMonitorStateWrapper, getFromStore } from './store'
+import { CompactedMonitorStateWrapper, getFromStore, stateWriteStatements } from './store'
 import {
   formatStatusChangeNotification,
   withTimeout,
@@ -361,9 +361,7 @@ async function terminalizeOutboxRow(
       try {
         await env.UPTIME_WORKER_D1.batch([
           terminalStatement(),
-          env.UPTIME_WORKER_D1.prepare(
-            'INSERT INTO uptimeflare (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
-          ).bind('state', wrapper.getCompactedStateStr()),
+          ...stateWriteStatements(env, wrapper.getCompactedStateStr()),
         ])
       } catch {
         // Keep both the state key and Outbox row pending for an atomic retry.
@@ -416,9 +414,7 @@ async function terminalizeRemovedOutboxRow(
          SET status = 'delivered', delivered_at = ?, last_error_code = ?
          WHERE event_key = ? AND status = 'pending'`
       ).bind(now, 'removed_monitor', row.event_key),
-      env.UPTIME_WORKER_D1.prepare(
-        'INSERT INTO uptimeflare (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
-      ).bind('state', wrapper.getCompactedStateStr()),
+      ...stateWriteStatements(env, wrapper.getCompactedStateStr()),
     ])
     return true
   } catch {
@@ -647,9 +643,7 @@ export async function dispatchPendingNotifications(
              SET status = 'delivered', delivered_at = ?, last_error_code = NULL
              WHERE event_key = ? AND status = 'pending'`
           ).bind(now, row.event_key),
-          env.UPTIME_WORKER_D1.prepare(
-            'INSERT INTO uptimeflare (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
-          ).bind('state', wrapper.getCompactedStateStr()),
+          ...stateWriteStatements(env, wrapper.getCompactedStateStr()),
         ])
         summary.delivered += 1
       } catch {

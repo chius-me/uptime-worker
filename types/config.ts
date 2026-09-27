@@ -266,6 +266,8 @@ export type MonitorStateCompactedV2 = {
   overallUp: number
   overallDown: number
   monitoringStartedAt: Record<string, number>
+  // Unconfirmed consecutive failures. Existing v2 snapshots default to no candidates.
+  pendingFailures?: Record<string, number>
   incident: Record<string, CompactedIncidentV2>
   latency: MonitorStateCompactedV1['latency']
 }
