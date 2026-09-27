@@ -3,7 +3,7 @@ import { applyD1Migrations, env, reset, SELF, type D1Migration } from 'cloudflar
 import worker, { type Env } from '../src/index'
 import { persistRun, runMonitoring } from '../src/run-monitoring'
 import { dispatchPendingNotifications } from '../src/scheduler'
-import { CompactedMonitorStateWrapper } from '../src/store'
+import { CompactedMonitorStateWrapper, CorruptStateError, getFromStore, setToStore, stateWriteStatements } from '../src/store'
 import { workerConfig } from '../uptime.config'
 
 type IntegrationEnv = Env & {
@@ -592,4 +592,112 @@ describe('Worker runtime integration', () => {
     expect(detail).toContain('notification_outbox_pending_monitor')
     expect(detail).toMatch(/event_key[>]?\? AND event_key[<]?\?/i)
   })
+})
+
+describe('chunked D1 state', () => {
+  function largeState() {
+    const wrapper = new CompactedMonitorStateWrapper(null)
+    const startedAt = 1_700_000_000
+    wrapper.data.lastUpdate = startedAt + 1_600_000
+    wrapper.data.lastRun = wrapper.data.lastUpdate
+    wrapper.data.monitoringStartedAt.blog = startedAt
+    for (let index = 0; index < 13_100; index += 1) {
+      const at = startedAt + index * 120
+      wrapper.appendIncident('blog', { start: [at], end: at + 60, error: ['Connection: refused'] })
+    }
+    // Also cover a single open incident whose error history exceeds one row.
+    wrapper.appendIncident('homelab', {
+      start: Array.from({ length: 5_000 }, (_, index) => startedAt + index * 60),
+      end: null,
+      error: Array.from({ length: 5_000 }, (_, index) => `Connection: ${index} ${'中😀'.repeat(80)}`),
+    })
+    return wrapper
+  }
+
+  it('round-trips large histories, confirms notifications and rolls failed batches back', async () => {
+    const wrapper = largeState()
+    const now = wrapper.data.lastUpdate
+    const incident = wrapper.data.incident.homelab
+    const eventKey = `${incident.id[0]}:down`
+    incident.downEventKey[0] = eventKey
+    const raw = wrapper.getCompactedStateStr()
+    expect(new TextEncoder().encode(raw).byteLength).toBeGreaterThan(2_000_000)
+    const output = {
+      state: wrapper.data,
+      events: [{ eventKey, incidentId: incident.id[0], monitorId: 'homelab', kind: 'down' as const,
+        payload: { startedAt: incident.startedAt[0], checkedAt: now, publicMessage: 'Connection failed' as const } }],
+      callbacks: [],
+      summary: { runId: 'large', scheduledAt: now, completedAt: now, total: 2, succeeded: 2, failed: 0, durationMs: 0 },
+    }
+    await persistRun(testEnv, output)
+    expect(await getFromStore(testEnv, 'state')).toBe(raw)
+    const stored = await testEnv.UPTIME_WORKER_D1.prepare(
+      'SELECT MAX(length(CAST(value AS BLOB))) AS size, COUNT(*) AS count FROM uptimeflare'
+    ).first<{ size: number; count: number }>()
+    expect(stored!.size).toBeLessThan(2_000_000)
+    expect(stored!.count).toBeGreaterThan(2)
+
+    await testEnv.UPTIME_WORKER_D1.exec(
+      "CREATE TRIGGER reject_chunk BEFORE INSERT ON uptimeflare WHEN NEW.key LIKE 'state:chunk:%' BEGIN SELECT RAISE(ABORT, 'reject chunk'); END"
+    )
+    output.state.lastUpdate += 60
+    await expect(persistRun(testEnv, output)).rejects.toThrow()
+    expect(await getFromStore(testEnv, 'state')).toBe(raw)
+    const notify = vi.fn(async () => undefined)
+    const deliveryDependencies = {
+      now: () => now,
+      resolveConfig: () => ({
+        monitors: workerConfig.monitors,
+        notification: { webhook: { url: 'https://hooks.example', payloadType: 'json' as const, payload: { text: '$MSG' } } },
+      }),
+      webhookNotify: notify,
+    }
+    await dispatchPendingNotifications(testEnv, 1, deliveryDependencies)
+    expect(notify).toHaveBeenCalledOnce()
+    expect(await getFromStore(testEnv, 'state')).toBe(raw)
+    expect(await testEnv.UPTIME_WORKER_D1.prepare(
+      'SELECT status FROM notification_outbox WHERE event_key = ?'
+    ).bind(eventKey).first()).toEqual({ status: 'pending' })
+    await testEnv.UPTIME_WORKER_D1.exec('DROP TRIGGER reject_chunk')
+    await dispatchPendingNotifications(testEnv, 1, deliveryDependencies)
+    expect(notify).toHaveBeenCalledTimes(2)
+    const confirmed = new CompactedMonitorStateWrapper(await getFromStore(testEnv, 'state'))
+    expect(confirmed.data.incident.homelab.downNotifiedAt[0]).toBe(now)
+    expect(confirmed.data.incident.blog.id).toHaveLength(13_100)
+    expect(confirmed.data.incident.homelab.changes[0]).toEqual(wrapper.data.incident.homelab.changes[0])
+    expect(await testEnv.UPTIME_WORKER_D1.prepare(
+      'SELECT status FROM notification_outbox WHERE event_key = ?'
+    ).bind(eventKey).first()).toEqual({ status: 'delivered' })
+
+    const small = new CompactedMonitorStateWrapper(null).getCompactedStateStr()
+    await setToStore(testEnv, 'state', small)
+    expect(await getFromStore(testEnv, 'state')).toBe(small)
+    expect(await testEnv.UPTIME_WORKER_D1.prepare('SELECT COUNT(*) AS count FROM uptimeflare').first())
+      .toEqual({ count: 1 })
+  }, 30_000)
+
+  it('fails closed when a chunk is missing and keeps the stored data intact', async () => {
+    const raw = largeState().getCompactedStateStr()
+    await setToStore(testEnv, 'state', raw)
+    await testEnv.UPTIME_WORKER_D1.prepare('DELETE FROM uptimeflare WHERE key = ?')
+      .bind('state:chunk:0000000000').run()
+    await expect(getFromStore(testEnv, 'state')).rejects.toThrow(CorruptStateError)
+    const response = await SELF.fetch('https://status.example/api/health')
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({ error: 'State unavailable' })
+    expect((await testEnv.UPTIME_WORKER_D1.prepare('SELECT COUNT(*) AS count FROM uptimeflare').first<{ count: number }>())!.count)
+      .toBeGreaterThan(1)
+  }, 30_000)
+
+  it('preserves inline legacy state and does not partially write an outbox transaction', async () => {
+    const before = new CompactedMonitorStateWrapper(null).getCompactedStateStr()
+    await setToStore(testEnv, 'state', before)
+    const large = largeState().getCompactedStateStr()
+    await expect(testEnv.UPTIME_WORKER_D1.batch([
+      ...stateWriteStatements(testEnv, large),
+      testEnv.UPTIME_WORKER_D1.prepare("INSERT INTO notification_outbox (event_key, payload, status, next_attempt_at) VALUES ('bad', '{}', 'invalid', 1)"),
+    ])).rejects.toThrow()
+    expect(await getFromStore(testEnv, 'state')).toBe(before)
+    expect(await testEnv.UPTIME_WORKER_D1.prepare('SELECT COUNT(*) AS count FROM uptimeflare').first()).toEqual({ count: 1 })
+  }, 30_000)
 })

@@ -36,6 +36,53 @@ export class ResponseTooLargeError extends Error {
   }
 }
 
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
+const PUBLIC_REQUEST_HEADERS = new Set(['accept', 'accept-language', 'user-agent'])
+
+// Inspect every hop ourselves: Workers may forward cookies and custom secret
+// headers across origins. Keep one abort signal/deadline for the entire chain.
+async function fetchWithRedirectPolicy(
+  url: string,
+  options: RequestInit<RequestInitCfProperties>
+): Promise<Response> {
+  if (options.redirect === 'manual' || options.redirect === 'error') return fetch(url, options)
+  let current = new URL(url)
+  let method = (options.method ?? 'GET').toUpperCase()
+  let body = options.body
+  const headers = new Headers(options.headers)
+  for (let hop = 0; ; hop += 1) {
+    if (!['https:', 'http:'].includes(current.protocol) || current.username || current.password) {
+      throw new Error('Unsafe probe URL')
+    }
+    const response = await fetch(current.toString(), { ...options, method, body, headers, redirect: 'manual' })
+    if (!REDIRECT_STATUSES.has(response.status)) return response
+    const location = response.headers.get('location')
+    if (!location) return response
+    try {
+      if (hop >= 5) throw new Error('Too many probe redirects')
+      const next = new URL(location, current)
+      if (current.protocol === 'https:' && next.protocol !== 'https:') {
+        throw new Error('Insecure probe redirect')
+      }
+      if (next.origin !== current.origin && (
+        body != null || [...headers.keys()].some((key) => !PUBLIC_REQUEST_HEADERS.has(key))
+      )) {
+        throw new Error('Cross-origin redirect with private request data')
+      }
+      if ((response.status === 303 && method !== 'HEAD') ||
+          ([301, 302].includes(response.status) && method === 'POST')) {
+        method = 'GET'
+        body = undefined
+        headers.delete('content-type')
+        headers.delete('content-length')
+      }
+      current = next
+    } finally {
+      try { void response.body?.cancel().catch(() => undefined) } catch { /* best effort */ }
+    }
+  }
+}
+
 export async function readTextLimited(
   response: Response,
   maxBytes = 65_536,
@@ -115,7 +162,7 @@ export async function fetchAndConsumeWithTimeout<T>(
 
   try {
     response = await Promise.race([
-      fetch(url, { ...options, signal: controller.signal }),
+      fetchWithRedirectPolicy(url, { ...options, signal: controller.signal }),
       deadline,
     ])
     try {

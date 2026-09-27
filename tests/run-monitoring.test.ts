@@ -610,11 +610,12 @@ describe('persistRun', () => {
     await persistRun(env, output)
 
     expect(batch).toHaveBeenCalledOnce()
-    expect(batch.mock.calls[0][0]).toHaveLength(3)
+    expect(batch.mock.calls[0][0]).toHaveLength(4)
     expect(prepared[0].sql).toContain('ON CONFLICT(key) DO UPDATE')
-    expect(prepared[1].sql).toContain('ON CONFLICT(event_key) DO NOTHING')
+    expect(prepared[1].sql).toContain('DELETE FROM uptimeflare')
+    expect(prepared[2].sql).toContain('ON CONFLICT(event_key) DO NOTHING')
     expect(prepared.map(({ sql }) => sql).join('\n')).not.toContain('monitor_runs')
-    const payload = JSON.parse(String(prepared[1].args[1]))
+    const payload = JSON.parse(String(prepared[2].args[1]))
     expect(payload).toEqual({
       eventKey: 'api:100:down',
       incidentId: 'api:100',

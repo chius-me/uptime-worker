@@ -10,12 +10,12 @@ import type {
 } from '../types/config'
 import type { Env } from './index'
 import { doMonitor as checkMonitor } from './monitor'
-import { failedProbe, type ProbeStatus } from './probe'
+import { failedProbe, successfulProbe, type ProbeStatus } from './probe'
 import {
   applyNotificationSuppression,
   transitionMonitor,
 } from './state-machine'
-import { CompactedMonitorStateWrapper, getFromStore } from './store'
+import { CompactedMonitorStateWrapper, getFromStore, stateWriteStatements } from './store'
 import { getWorkerLocation as resolveWorkerLocation } from './util'
 import { maintenances as configuredMaintenances } from '../uptime.config'
 import { hasUsableWebhook } from './config'
@@ -251,6 +251,7 @@ function pruneRemovedMonitorState(
   delete state.monitoringStartedAt[monitorId]
   delete state.incident[monitorId]
   delete state.latency[monitorId]
+  if (state.pendingFailures) delete state.pendingFailures[monitorId]
 }
 
 function retainRecentData(
@@ -346,9 +347,22 @@ export async function runMonitoring(
     }
 
     const previous = latestIncident(wrapper.data, monitor.id)
+    const pendingFailures = wrapper.data.pendingFailures ??= {}
+    let effectiveStatus = check.status
+    if (!check.status.up && previous?.resolvedAt !== null) {
+      const count = (pendingFailures[monitor.id] ?? 0) + 1
+      if (count < (monitor.failureThreshold ?? 1)) {
+        pendingFailures[monitor.id] = count
+        effectiveStatus = successfulProbe(check.status.ping)
+      } else {
+        delete pendingFailures[monitor.id]
+      }
+    } else {
+      delete pendingFailures[monitor.id]
+    }
     const transitioned = transitionMonitor(
       { monitorId: monitor.id, incident: previous },
-      check.status,
+      effectiveStatus,
       now,
       (config.notification?.gracePeriod ?? 0) * 60
     )
@@ -361,17 +375,17 @@ export async function runMonitoring(
     events.push(...notification.events)
 
     const incident = notification.incident
-    if (statusChanged(previous, incident, check.status) && incident) {
+    if (statusChanged(previous, incident, effectiveStatus) && incident) {
       callbacks.push({
         type: 'status-change',
         monitorId: monitor.id,
-        isUp: check.status.up,
+        isUp: effectiveStatus.up,
         startedAt: incident.startedAt,
         checkedAt: now,
-        publicMessage: check.status.up ? 'OK' : check.status.publicMessage,
+        publicMessage: effectiveStatus.publicMessage,
       })
     }
-    if (!check.status.up && incident) {
+    if (!effectiveStatus.up && incident) {
       callbacks.push({
         type: 'incident',
         monitorId: monitor.id,
@@ -381,7 +395,7 @@ export async function runMonitoring(
       })
     }
 
-    check.status.up ? overallUp += 1 : overallDown += 1
+    effectiveStatus.up ? overallUp += 1 : overallDown += 1
     wrapper.data.monitoringStartedAt[monitor.id] ??= now
     wrapper.appendLatency(monitor.id, {
       loc: check.location || 'unknown',
@@ -421,11 +435,7 @@ export async function runMonitoring(
 
 export async function persistRun(env: Env, output: RunOutput): Promise<void> {
   const state = new CompactedMonitorStateWrapper(JSON.stringify(output.state)).getCompactedStateStr()
-  const statements: D1PreparedStatement[] = [
-    env.UPTIME_WORKER_D1.prepare(
-      'INSERT INTO uptimeflare (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
-    ).bind('state', state),
-  ]
+  const statements = stateWriteStatements(env, state)
 
   for (const event of output.events) {
     const payload = JSON.stringify({

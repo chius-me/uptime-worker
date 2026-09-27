@@ -192,11 +192,8 @@ function summaryForMonitor(
     return { up: null, latency: null, location: null, message: 'Not checked yet' }
   }
 
-  const failureThreshold = monitor.failureThreshold ?? 1
-  const failureSamples = lastIncident?.end === null
-    ? latencies.filter(({ time }) => time >= (lastIncident.start[0] ?? Number.POSITIVE_INFINITY)).length
-    : 0
-  const up = !lastIncident || lastIncident.end !== null || failureSamples < failureThreshold
+  // Only confirmed failures become incidents; all public surfaces use that state.
+  const up = !lastIncident || lastIncident.end !== null
   return {
     up,
     latency: lastLatency.ping,

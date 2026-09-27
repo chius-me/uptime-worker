@@ -148,7 +148,7 @@ async function webhookNotify(
         throw 'Unrecognized payload type: ' + webhook.payloadType
     }
 
-    response = await fetchTimeout(url, webhook.timeout ?? 5000, { method, headers, body })
+    response = await fetchTimeout(url, webhook.timeout ?? 5000, { method, headers, body, redirect: 'manual' })
     status = response.status
 
     logEvent('webhook_response', {

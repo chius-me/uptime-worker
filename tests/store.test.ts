@@ -198,3 +198,27 @@ describe('versioned compacted state', () => {
     expect(() => new CompactedMonitorStateWrapper(JSON.stringify(makeState()))).toThrow(CorruptStateError)
   })
 })
+
+it('reads one coherent snapshot if chunked state changes between the initial read and snapshot', async () => {
+  const manifest = JSON.stringify({ storageFormat: 'chunked-state-v1', chunks: 5, length: 600_000 })
+  const replacement = 'b'.repeat(600_000)
+  const rows = [{ key: 'state', value: manifest }]
+  for (let offset = 0, index = 0; offset < replacement.length; offset += 128_000, index += 1) {
+    rows.push({ key: `state:chunk:${String(index).padStart(10, '0')}`, value: JSON.stringify(replacement.slice(offset, offset + 128_000)) })
+  }
+  const env = { UPTIME_WORKER_D1: { prepare: () => ({ bind: () => ({
+    // The initially observed generation had a different length and chunk count.
+    first: async () => ({ value: JSON.stringify({ storageFormat: 'chunked-state-v1', chunks: 8, length: 1_000_000 }) }),
+    all: async () => ({ results: rows }),
+  }) }) } } as any
+  expect(await getFromStore(env, 'state')).toBe(replacement)
+})
+
+it('accepts a concurrent shrink from chunked to inline state', async () => {
+  const small = new CompactedMonitorStateWrapper(null).getCompactedStateStr()
+  const env = { UPTIME_WORKER_D1: { prepare: () => ({ bind: () => ({
+    first: async () => ({ value: JSON.stringify({ storageFormat: 'chunked-state-v1', chunks: 5, length: 600_000 }) }),
+    all: async () => ({ results: [{ key: 'state', value: small }] }),
+  }) }) } } as any
+  expect(await getFromStore(env, 'state')).toBe(small)
+})

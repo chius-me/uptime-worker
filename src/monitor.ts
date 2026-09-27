@@ -8,6 +8,7 @@ import {
   failedProbe,
   fetchAndConsumeWithTimeout,
   isProbePing,
+  MAX_PROBE_PING,
   parseProxyResult,
   readTextLimited,
   successfulProbe,
@@ -29,6 +30,7 @@ interface GlobalPingResult {
       timings?: { total: number }
       statusCode?: number
       rawBody?: string
+      truncated?: boolean
       tls?: { authorized: boolean }
     }
   }>
@@ -116,9 +118,12 @@ async function httpResponseBasicCheck(
     responseBody = await bodyReader()
   } catch (error) {
     if (error instanceof ResponseTooLargeError) {
+      if (monitor.responseForbiddenKeyword && error.partialText.includes(monitor.responseForbiddenKeyword)) {
+        return { internalError: 'Content check: forbidden keyword present' }
+      }
       const requiredFound = !monitor.responseKeyword || error.partialText.includes(monitor.responseKeyword)
       if (requiredFound && !monitor.responseForbiddenKeyword) return null
-      return { internalError: 'Content check inconclusive: response exceeded 65536 bytes' }
+      return { internalError: 'Content check inconclusive: response body was truncated' }
     }
     throw error
   }
@@ -159,11 +164,24 @@ function asGlobalPingResult(value: unknown): GlobalPingResult {
   return value as GlobalPingResult
 }
 
-function probePing(value: unknown, field: string): number {
-  if (!isProbePing(value)) {
+function probePing(value: unknown, field: string, fractional = false): number {
+  const valid = fractional
+    ? typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= MAX_PROBE_PING
+    : isProbePing(value)
+  if (!valid) {
     throw new Error(`Invalid Globalping ${field}`)
   }
-  return value as number
+  return Math.round(value as number)
+}
+
+export function parseTcpTarget(target: string): { hostname: string; port: number } {
+  // A non-special scheme preserves explicit ports, including HTTPS's default 443.
+  const parsed = new URL(`tcp://${target}`)
+  if (!parsed.hostname || !/^\d+$/.test(parsed.port) || parsed.username || parsed.password ||
+      parsed.pathname || parsed.search || parsed.hash) throw new Error('Invalid TCP target')
+  const port = Number(parsed.port)
+  if (port < 1 || port > 65535) throw new Error('Invalid TCP port')
+  return { hostname: parsed.hostname.replace(/^\[|\]$/g, ''), port }
 }
 
 function globalPingStatusCode(value: unknown): number {
@@ -198,7 +216,7 @@ export async function getStatusWithGlobalPing(
     const token = gpUrl.hostname
     let globalPingRequest: Record<string, unknown>
     if (monitor.method === 'TCP_PING') {
-      const targetUrl = new URL(`https://${monitor.target}`)
+      const targetUrl = parseTcpTarget(monitor.target)
       globalPingRequest = {
         type: 'ping',
         target: targetUrl.hostname,
@@ -206,7 +224,7 @@ export async function getStatusWithGlobalPing(
         measurementOptions: {
           port: targetUrl.port,
           packets: 1,
-          protocol: 'tcp',
+          protocol: 'TCP',
           ...getDomainOnlyIpVersionOption(targetUrl.hostname, gpUrl),
         },
       }
@@ -284,7 +302,7 @@ export async function getStatusWithGlobalPing(
     const location = globalPingLocation(first)
 
     if (monitor.method === 'TCP_PING') {
-      return { location, status: successfulProbe(probePing(first.result.stats?.avg, 'latency')) }
+      return { location, status: successfulProbe(probePing(first.result.stats?.avg, 'latency', true)) }
     }
 
     const ping = probePing(first.result.timings?.total, 'latency')
@@ -292,6 +310,7 @@ export async function getStatusWithGlobalPing(
     const checkFailure = await httpResponseBasicCheck(monitor, code, async () => {
       const body = first.result.rawBody ?? ''
       if (typeof body !== 'string') throw new Error('Invalid Globalping body')
+      if (first.result.truncated === true) throw new ResponseTooLargeError(body)
       if (new TextEncoder().encode(body).byteLength > 65_536) {
         throw new ResponseTooLargeError(body.slice(0, 65_536))
       }
@@ -338,8 +357,7 @@ export async function getStatus(
       const connect = dependencies.connect ?? await import(/* webpackIgnore: true */ 'cloudflare:sockets').then(
         (sockets) => sockets.connect as unknown as ProbeDependencies['connect']
       )
-      const parsed = new URL(`https://${monitor.target}`)
-      socket = connect!({ hostname: parsed.hostname, port: Number(parsed.port) })
+      socket = connect!(parseTcpTarget(monitor.target))
       await withTimeout(timeout, socket.opened)
       logEvent('tcp_connection_succeeded', { monitorId: monitor.id })
       return successfulProbe(Date.now() - startTime)

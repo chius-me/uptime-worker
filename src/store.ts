@@ -14,10 +14,89 @@ import { publicMessageForInternalError } from './probe'
 export async function getFromStore(env: Env, key: string): Promise<string | null> {
   const stmt = env.UPTIME_WORKER_D1.prepare('SELECT value FROM uptimeflare WHERE key = ?')
   const result = await stmt.bind(key).first<{ value: string }>()
-  return result?.value ?? null
+  const initial = result?.value ?? null
+  if (key !== 'state' || initial === null || !chunkManifest(initial)) return initial
+
+  // Re-read the manifest and all chunks in ONE statement, so a concurrent
+  // scheduler commit cannot mix generations between separate SELECTs.
+  const snapshot = await env.UPTIME_WORKER_D1.prepare(
+    'SELECT key, value FROM uptimeflare WHERE key = ? OR (key >= ? AND key < ?) ORDER BY key'
+  ).bind(key, CHUNK_PREFIX, CHUNK_END).all<{ key: string; value: string }>()
+  const rows = snapshot.results ?? []
+  const root = rows.find((row) => row.key === key)?.value
+  if (root === undefined) throw new CorruptStateError('Missing state manifest')
+  const manifest = chunkManifest(root)
+  if (!manifest) return root // A concurrent write may have shrunk to inline state.
+  const chunks = rows.filter((row) => row.key !== key)
+  if (chunks.length !== manifest.chunks) throw new CorruptStateError('Missing state chunks')
+  const value = chunks.map((row, index) => {
+    if (row.key !== chunkKey(index)) throw new CorruptStateError('Invalid state chunk order')
+    try {
+      const part: unknown = JSON.parse(row.value)
+      if (typeof part !== 'string') throw new Error('Invalid chunk')
+      return part
+    } catch {
+      throw new CorruptStateError('Invalid state chunk')
+    }
+  }).join('')
+  if (value.length !== manifest.length) throw new CorruptStateError('Incomplete state chunks')
+  return value
+}
+
+const CHUNK_PREFIX = 'state:chunk:'
+const CHUNK_END = 'state:chunk;'
+const INLINE_STATE_BYTES = 512_000
+const CHUNK_CODE_UNITS = 128_000
+
+function chunkKey(index: number): string {
+  return `${CHUNK_PREFIX}${String(index).padStart(10, '0')}`
+}
+
+function chunkManifest(value: string): { chunks: number; length: number } | null {
+  // A manifest contains only three scalar fields. Avoid parsing ordinary large
+  // inline snapshots twice on every API request and monitoring run.
+  if (value.length > 512) return null
+  let parsed: unknown
+  try { parsed = JSON.parse(value) } catch { return null }
+  if (!isRecord(parsed) || !('storageFormat' in parsed)) return null
+  if (parsed.storageFormat !== 'chunked-state-v1' ||
+      !Number.isSafeInteger(parsed.chunks) || (parsed.chunks as number) < 1 ||
+      !Number.isSafeInteger(parsed.length) || (parsed.length as number) < 1 ||
+      parsed.chunks !== Math.ceil((parsed.length as number) / CHUNK_CODE_UNITS)) {
+    throw new CorruptStateError('Invalid state manifest')
+  }
+  return parsed as { chunks: number; length: number }
+}
+
+// Include these statements in the SAME batch as outbox changes. JSON encoding
+// each chunk preserves Unicode even when a UTF-16 surrogate pair crosses a cut;
+// worst-case encoded chunk size is < 768,002 bytes, below D1's 2 MB row limit.
+export function stateWriteStatements(env: Env, value: string): D1PreparedStatement[] {
+  const chunks: string[] = []
+  if (new TextEncoder().encode(value).byteLength > INLINE_STATE_BYTES) {
+    for (let index = 0; index < value.length; index += CHUNK_CODE_UNITS) {
+      chunks.push(JSON.stringify(value.slice(index, index + CHUNK_CODE_UNITS)))
+    }
+  }
+  const root = chunks.length === 0 ? value : JSON.stringify({
+    storageFormat: 'chunked-state-v1', chunks: chunks.length, length: value.length,
+  })
+  const insert = (key: string, part: string) => env.UPTIME_WORKER_D1.prepare(
+    'INSERT INTO uptimeflare (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value'
+  ).bind(key, part)
+  return [
+    insert('state', root),
+    env.UPTIME_WORKER_D1.prepare('DELETE FROM uptimeflare WHERE key >= ? AND key < ?')
+      .bind(CHUNK_PREFIX, CHUNK_END),
+    ...chunks.map((part, index) => insert(chunkKey(index), part)),
+  ]
 }
 
 export async function setToStore(env: Env, key: string, value: string): Promise<void> {
+  if (key === 'state') {
+    await env.UPTIME_WORKER_D1.batch(stateWriteStatements(env, value))
+    return
+  }
   const stmt = env.UPTIME_WORKER_D1.prepare(
     'INSERT INTO uptimeflare (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value;'
   )
@@ -227,6 +306,13 @@ function validateV2(state: MonitorStateCompactedV2): MonitorStateCompactedV2 {
   safeInteger(state.lastRun, 'lastRun')
   safeInteger(state.overallUp, 'overallUp')
   safeInteger(state.overallDown, 'overallDown')
+  if (state.pendingFailures !== undefined) {
+    for (const count of Object.values(recordValue(state.pendingFailures, 'pendingFailures'))) {
+      if (safeInteger(count, 'pendingFailures.count') < 1 || (count as number) > 9) {
+        corrupt('Invalid pending failure count')
+      }
+    }
+  }
   const monitoringStartedAt = recordValue(state.monitoringStartedAt, 'monitoringStartedAt')
   Object.entries(monitoringStartedAt).forEach(([monitorId, at]) => {
     safeInteger(at, `monitoringStartedAt.${monitorId}`)
