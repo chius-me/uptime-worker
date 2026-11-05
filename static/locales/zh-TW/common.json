@@ -56,5 +56,7 @@
   "All": "全部",
   "Select monitor": "選取站點",
   "Backwards": "← 上個月",
-  "Forward": "下個月 →"
+  "Forward": "下個月 →",
+  "Switch to Chinese": "切換至中文",
+  "Switch to English": "切換至英文"
 }

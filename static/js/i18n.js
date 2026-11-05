@@ -5,35 +5,68 @@ const I18N = {
   lang: 'en',
   strings: {},
 
+  normalize(lang) {
+    const lower = String(lang || '').trim().replace(/_/g, '-').toLowerCase()
+    const base = lower.split('-')[0]
+    if (base === 'zh') {
+      if (lower.includes('hant') || lower.endsWith('-tw') || lower.endsWith('-hk') || lower.endsWith('-mo')) return 'zh-TW'
+      return 'zh-CN'
+    }
+    if (base === 'fr') return 'fr-FR'
+    if (base === 'de') return 'de-DE'
+    if (base === 'en') return 'en'
+    return 'en'
+  },
+
   // Detect browser language
   detect() {
     const langs = navigator.languages || [navigator.language || 'en']
     for (const l of langs) {
-      const norm = l.replace('_', '-')
-      if (norm === 'zh-CN' || norm === 'zh-TW' || norm === 'zh' ||
-          norm === 'fr-FR' || norm === 'fr' || norm === 'de-DE' || norm === 'de' ||
-          norm === 'en') return norm
+      const lower = String(l).replace(/_/g, '-').toLowerCase()
+      const base = lower.split('-')[0]
+      if (base === 'zh' || base === 'fr' || base === 'de' || base === 'en') return this.normalize(lower)
     }
     return 'en'
   },
 
-  // Load locale data asynchronously
-  async init(lang) {
-    this.lang = lang || this.detect()
-    // Normalize: zh → zh-CN, fr → fr-FR, de → de-DE
-    const map = { zh: 'zh-CN', fr: 'fr-FR', de: 'de-DE' }
-    const file = map[this.lang] || this.lang
+  readSaved() {
     try {
-      const resp = await fetch(`/locales/${file}/common.json`)
+      return localStorage.getItem('uptime-worker-lang')
+    } catch {
+      return null
+    }
+  },
+
+  // Load locale data asynchronously. An explicit lang wins over the saved choice.
+  async init(lang) {
+    const chosen = lang || this.readSaved() || this.detect()
+    this.lang = this.normalize(chosen)
+    try {
+      const resp = await fetch(`/locales/${this.lang}/common.json`)
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       this.strings = await resp.json()
     } catch {
       // Fallback to English
       if (this.lang !== 'en') {
-        const resp = await fetch('/locales/en/common.json')
-        this.strings = await resp.json()
+        try {
+          const resp = await fetch('/locales/en/common.json')
+          if (resp.ok) this.strings = await resp.json()
+        } catch {
+          // Keep the last successfully loaded strings.
+        }
       }
     }
     document.documentElement.lang = this.lang
+  },
+
+  async use(lang) {
+    const next = this.normalize(lang)
+    try {
+      localStorage.setItem('uptime-worker-lang', next)
+    } catch {
+      // Private browsing can reject storage; the page still switches for this visit.
+    }
+    await this.init(next)
   },
 
   // Translate: t('key') or t('key', { var: 'value' })

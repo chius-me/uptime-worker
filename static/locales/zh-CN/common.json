@@ -56,5 +56,7 @@
   "All": "全部",
   "Select monitor": "选择监控",
   "Backwards": "← 上一月",
-  "Forward": "下一月 →"
+  "Forward": "下一月 →",
+  "Switch to Chinese": "切换到中文",
+  "Switch to English": "切换到英文"
 }
