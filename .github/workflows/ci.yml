@@ -59,5 +59,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Apply D1 migrations
+        run: npm run d1:migrate:remote
+
       - name: Deploy to Cloudflare Workers
         run: npm run deploy

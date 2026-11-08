@@ -1244,7 +1244,7 @@ describe('deployment schema', () => {
   })
 
   it('deploys D1 migrations and documents install migration commands', async () => {
-    const workflow = await readFile(fileURLToPath(String(new URL('../.github/workflows/deploy.yml', import.meta.url))), 'utf8')
+    const workflow = await readFile(fileURLToPath(String(new URL('../.github/workflows/ci.yml', import.meta.url))), 'utf8')
     const packageJson = JSON.parse(
       await readFile(fileURLToPath(String(new URL('../package.json', import.meta.url))), 'utf8')
     ) as { scripts: Record<string, string> }
