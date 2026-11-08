@@ -763,51 +763,6 @@ function renderIncidents(container) {
   container.innerHTML = html
 }
 
-// ── Language toggle ──────────────────────────────
-let preferredChineseLocale = 'zh-CN'
-
-function isChineseLocale(lang) {
-  return /^zh(?:-|$)/i.test(String(lang || ''))
-}
-
-function applyLangToggle(btn) {
-  const lang = typeof I18N.lang === 'string' ? I18N.lang : 'en'
-  if (lang === 'zh-CN' || lang === 'zh-TW') preferredChineseLocale = lang
-  const chinese = isChineseLocale(lang)
-  btn.querySelectorAll('.lang-option').forEach((option) => {
-    const isChineseOption = option.getAttribute('data-lang') === 'zh'
-    option.classList.toggle('is-active', isChineseOption === chinese)
-  })
-  const label = chinese ? I18N.t('Switch to English') : I18N.t('Switch to Chinese')
-  btn.setAttribute('aria-label', label)
-  btn.title = label
-}
-
-function localeFromLangClick(event, current) {
-  const target = event.target
-  const option = target && typeof target.closest === 'function' ? target.closest('.lang-option') : null
-  const requested = option ? option.getAttribute('data-lang') : null
-  if (requested === 'zh') return preferredChineseLocale
-  if (requested === 'en') return 'en'
-  return isChineseLocale(current) ? 'en' : preferredChineseLocale
-}
-
-function setupLangToggle() {
-  const btn = document.getElementById('lang-toggle')
-  if (!btn) return
-  applyLangToggle(btn)
-  btn.addEventListener('click', async (event) => {
-    const current = typeof I18N.lang === 'string' ? I18N.lang : 'en'
-    const next = localeFromLangClick(event, current)
-    const sameChinese = next !== 'en' && isChineseLocale(current) && isChineseLocale(next)
-    if (next === current || sameChinese) return
-    if (typeof I18N.use === 'function') await I18N.use(next)
-    else I18N.lang = next
-    applyLangToggle(btn)
-    if (apiData) render()
-  })
-}
-
 // ── Theme Switcher Manual Toggle logic ───────────
 function setupThemeToggle() {
   const btn = document.getElementById('theme-toggle')
@@ -866,7 +821,6 @@ window.addEventListener('resize', () => {
 document.addEventListener('DOMContentLoaded', async () => {
   await I18N.init()
   setupThemeToggle()
-  setupLangToggle()
   const main = document.getElementById('main-content')
   main.innerHTML = '<div class="empty-state"><div class="loading-spinner"></div></div>'
   window.addEventListener('hashchange', () => { if (apiData) render() })

@@ -33,7 +33,6 @@ const appPath = fileURLToPath(String(new URL('../static/js/app.js', import.meta.
 const appShell = `<!doctype html><html><body>
   <a class="nav-brand"></a>
   <div class="nav-controls"><div id="nav-links-left"></div>
-  <button id="lang-toggle" class="lang-toggle-btn" type="button"><span class="lang-option" data-lang="zh">中</span><span class="lang-option" data-lang="en">EN</span></button>
   <button id="theme-toggle"></button><div id="nav-links-right"></div></div>
   <main id="main-content"></main><div id="footer-text"></div><div id="page-title"></div>
 </body></html>`
@@ -152,7 +151,7 @@ afterEach(() => {
 })
 
 describe('status page monitoring state', () => {
-  it('keeps the brand left and orders GitHub, language, theme, and email on the right', async () => {
+  it('keeps the brand left and orders GitHub, theme, and email together on the right', async () => {
     vi.useFakeTimers()
     const now = Math.round(Date.now() / 1_000)
     const payload = {
@@ -186,7 +185,6 @@ describe('status page monitoring state', () => {
     expect(dom.window.document.querySelector('.nav-brand')?.textContent).toBe('Status')
     expect(controls ? Array.from(controls.children as ArrayLike<{ id: string }>).map(element => element.id) : []).toEqual([
       'nav-links-left',
-      'lang-toggle',
       'theme-toggle',
       'nav-links-right',
     ])
@@ -195,17 +193,16 @@ describe('status page monitoring state', () => {
     expect(github?.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
     expect(github?.textContent).toBe('')
     expect(email?.textContent).toBe('Email Me')
+    expect(dom.window.document.getElementById('lang-toggle')).toBeNull()
     expect(dom.window.document.getElementById('theme-toggle')).not.toBeNull()
     dom.window.close()
   })
 
-  it('switches the status page between English and Chinese from the header', async () => {
+  it('keeps the status page in English without a header language toggle', async () => {
     vi.useFakeTimers()
-    const localeNames = ['en', 'zh-CN', 'zh-TW']
-    const locales = Object.fromEntries(await Promise.all(localeNames.map(async (locale) => {
-      const content = await readFile(fileURLToPath(String(new URL(`../static/locales/${locale}/common.json`, import.meta.url))), 'utf8')
-      return [locale, JSON.parse(content) as Record<string, string>]
-    })))
+    const indexHtml = await readFile(fileURLToPath(String(new URL('../static/index.html', import.meta.url))), 'utf8')
+    const enContent = await readFile(fileURLToPath(String(new URL('../static/locales/en/common.json', import.meta.url))), 'utf8')
+    const enTranslations = JSON.parse(enContent) as Record<string, string>
     const now = Math.round(Date.now() / 1_000)
     const payload = {
       schemaVersion: 2,
@@ -221,87 +218,25 @@ describe('status page monitoring state', () => {
       state: { monitoringStartedAt: { api: now - 3_600 }, incident: { api: [] }, latency: {} },
     }
     const fetchImpl = vi.fn(async (input: unknown) => {
-      const locale = String(input).match(/\/locales\/([^/]+)\//)?.[1]
-      return { ok: true, json: async () => locale ? locales[locale] ?? locales.en : payload }
+      const isLocale = String(input).includes('/locales/')
+      return { ok: true, json: async () => isLocale ? enTranslations : payload }
     })
-    const { dom } = await loadLocalizedStatusPage(appShell, fetchImpl)
-    const clickLang = async (lang: 'zh' | 'en') => {
-      const option = dom.window.document.querySelector(`#lang-toggle [data-lang="${lang}"]`)
-      option?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-      await vi.advanceTimersByTimeAsync(0)
-    }
-    const activeLang = () => dom.window.document.querySelector('#lang-toggle .lang-option.is-active')?.getAttribute('data-lang')
+    const { dom, I18N } = await loadLocalizedStatusPage(indexHtml, fetchImpl, 'zh-CN')
 
     dom.window.document.dispatchEvent(new dom.window.Event('DOMContentLoaded'))
     await vi.advanceTimersByTimeAsync(0)
 
-    const button = dom.window.document.getElementById('lang-toggle')
-    expect(button?.getAttribute('aria-label')).toBe('Switch to Chinese')
-    expect(activeLang()).toBe('en')
-    expect(dom.window.document.querySelector('.status-title')?.textContent).toBe('All systems operational')
-
-    await clickLang('zh')
-    expect(dom.window.document.documentElement.lang).toBe('zh-CN')
-    expect(dom.window.localStorage.getItem('uptime-worker-lang')).toBe('zh-CN')
-    expect(dom.window.document.querySelector('.status-title')?.textContent).toBe('系统一切正常')
-    expect(button?.getAttribute('aria-label')).toBe('切换到英文')
-    expect(activeLang()).toBe('zh')
-
-    await clickLang('en')
+    expect(dom.window.document.getElementById('lang-toggle')).toBeNull()
+    expect(I18N.lang).toBe('en')
     expect(dom.window.document.documentElement.lang).toBe('en')
     expect(dom.window.document.querySelector('.status-title')?.textContent).toBe('All systems operational')
-    expect(activeLang()).toBe('en')
-    dom.window.close()
-  })
-
-  it('returns to Traditional Chinese when that was the saved Chinese locale', async () => {
-    vi.useFakeTimers()
-    const localeNames = ['en', 'zh-CN', 'zh-TW']
-    const locales = Object.fromEntries(await Promise.all(localeNames.map(async (locale) => {
-      const content = await readFile(fileURLToPath(String(new URL(`../static/locales/${locale}/common.json`, import.meta.url))), 'utf8')
-      return [locale, JSON.parse(content) as Record<string, string>]
-    })))
-    const now = Math.round(Date.now() / 1_000)
-    const payload = {
-      schemaVersion: 2,
-      up: 1,
-      down: 0,
-      updatedAt: now,
-      stale: false,
-      monitoringStatus: 'healthy',
-      monitors: { api: { up: true } },
-      config: { title: 'Status', links: [] },
-      monitorsConfig: [{ id: 'api', name: 'API', hideLatencyChart: true }],
-      maintenances: [],
-      state: { monitoringStartedAt: { api: now - 3_600 }, incident: { api: [] }, latency: {} },
-    }
-    const fetchImpl = vi.fn(async (input: unknown) => {
-      const locale = String(input).match(/\/locales\/([^/]+)\//)?.[1]
-      return { ok: true, json: async () => locale ? locales[locale] ?? locales.en : payload }
-    })
-    const { dom } = await loadLocalizedStatusPage(appShell, fetchImpl, 'zh-TW')
-    const clickLang = async (lang: 'zh' | 'en') => {
-      dom.window.document.querySelector(`#lang-toggle [data-lang="${lang}"]`)
-        ?.dispatchEvent(new dom.window.MouseEvent('click', { bubbles: true }))
-      await vi.advanceTimersByTimeAsync(0)
-    }
-
-    dom.window.document.dispatchEvent(new dom.window.Event('DOMContentLoaded'))
-    await vi.advanceTimersByTimeAsync(0)
-    expect(dom.window.document.documentElement.lang).toBe('zh-TW')
-    expect(dom.window.document.querySelector('#lang-toggle .lang-option.is-active')?.getAttribute('data-lang')).toBe('zh')
-
-    await clickLang('en')
-    expect(dom.window.document.documentElement.lang).toBe('en')
-    await clickLang('zh')
-    expect(dom.window.document.documentElement.lang).toBe('zh-TW')
-    expect(dom.window.localStorage.getItem('uptime-worker-lang')).toBe('zh-TW')
+    expect(fetchImpl).toHaveBeenCalledWith('/locales/en/common.json')
     dom.window.close()
   })
 
   it('provides monitoring-state copy in every supported locale', async () => {
-    const localeFiles = ['en', 'zh-CN', 'zh-TW', 'de-DE', 'fr-FR']
-    const requiredKeys = ['Monitoring initializing', 'Monitoring delayed', 'Last successful check', 'Unknown', 'Switch to Chinese', 'Switch to English']
+    const localeFiles = ['en']
+    const requiredKeys = ['Monitoring initializing', 'Monitoring delayed', 'Last successful check', 'Unknown']
 
     await Promise.all(localeFiles.map(async (locale) => {
       const content = await readFile(fileURLToPath(String(new URL(`../static/locales/${locale}/common.json`, import.meta.url))), 'utf8')

@@ -45,6 +45,15 @@ const workerConfig: WorkerConfig = {
       tooltip: 'From Aliyun',
       timeout: 5000,
     },
+    {
+      id: 'vps2',
+      name: 'VPS in Oregon',
+      method: 'TCP_PING',
+      // 通过 CF Secrets 传入环境变量 <VPS2_IP> 和 <VPS2_PORT>
+      target: '<VPS2_IP>:<VPS2_PORT>',
+      tooltip: 'From Google Cloud',
+      timeout: 5000,
+    },
     // Custom proxies must be explicitly allowlisted. The Worker sends only a
     // monitor DTO; never add Authorization or Cookie to forwardHeaders here.
     // {
