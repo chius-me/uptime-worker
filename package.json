@@ -9,7 +9,7 @@
   "description": "Serverless uptime monitoring & status page \u2014 pure Cloudflare Workers, zero Pages",
   "scripts": {
     "dev": "wrangler dev --test-scheduled --persist-to ./.wrangler/state",
-    "deploy": "wrangler deploy",
+    "deploy": "npm run d1:migrate:remote && wrangler deploy",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "check": "npm test && npm run typecheck",
