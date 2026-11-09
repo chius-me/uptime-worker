@@ -54,6 +54,14 @@ const workerConfig: WorkerConfig = {
       tooltip: 'From Google Cloud',
       timeout: 5000,
     },
+        {
+      id: 'vps3',
+      name: 'VPS in Oregon',
+      method: 'TCP_PING',
+      target: '<VPS3_IP>:<VPS3_PORT>',
+      tooltip: 'From Google Cloud',
+      timeout: 5000,
+    },
     // Custom proxies must be explicitly allowlisted. The Worker sends only a
     // monitor DTO; never add Authorization or Cookie to forwardHeaders here.
     // {
