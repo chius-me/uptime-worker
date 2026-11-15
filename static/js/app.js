@@ -19,7 +19,7 @@ const ICONS = {
 function barColor(percent) {
   const p = Number(percent)
   if (p >= 99.9) return 'var(--green)'
-  if (p >= 99)   return 'rgba(16, 185, 129, 0.6)'
+  if (p >= 99)   return 'var(--orange)'
   if (p >= 95)   return 'var(--orange)'
   if (isNaN(p))  return 'var(--gray)'
   return 'var(--red)'
@@ -458,8 +458,8 @@ function drawChart(monId, state, hoverPoint = null) {
     canvas.style.width = (parent.clientWidth || 800) + 'px'
     canvas.style.height = '150px'
     ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1)
-    ctx.fillStyle = getCssVar('--text-muted') || '#94a3b8'
-    ctx.font = '13px Geist, sans-serif'
+    ctx.fillStyle = getCssVar('--text-muted') || '#777777'
+    ctx.font = '13px Helvetica Neue, Helvetica, Arial, sans-serif'
     ctx.textAlign = 'center'
     ctx.fillText(I18N.t('No data available'), canvas.width / 2 / (window.devicePixelRatio || 1), 80)
     return
@@ -483,11 +483,11 @@ function drawChart(monId, state, hoverPoint = null) {
 
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark' ||
     (document.documentElement.getAttribute('data-theme') === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches)
-  const gridColor = isDark ? 'rgba(30, 41, 59, 0.6)' : '#e2e8f0'
-  const textColor = isDark ? '#64748b' : '#94a3b8'
-  // Pale, low-saturation color for chart
-  const accentColor = isDark ? '#64748b' : '#cbd5e1'
-  const fillGradientStart = isDark ? 'rgba(100, 116, 139, 0.15)' : 'rgba(203, 213, 225, 0.25)'
+  // Swiss style: high contrast, minimal decoration
+  const gridColor = isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.08)'
+  const textColor = isDark ? '#888888' : '#777777'
+  const accentColor = isDark ? '#ffffff' : '#000000'
+  const fillGradientStart = isDark ? 'rgba(255, 255, 255, 0.06)' : 'rgba(0, 0, 0, 0.04)'
 
   // Data range
   const points = latencies.map(l => ({ x: l.time * 1000, y: l.ping }))
@@ -503,7 +503,7 @@ function drawChart(monId, state, hoverPoint = null) {
   // Grid lines
   ctx.strokeStyle = gridColor
   ctx.lineWidth = 1
-  ctx.font = '10px Geist Mono, monospace'
+  ctx.font = '10px SF Mono, SFMono-Regular, Consolas, monospace'
   ctx.fillStyle = textColor
   ctx.textAlign = 'right'
 
@@ -556,8 +556,8 @@ function drawChart(monId, state, hoverPoint = null) {
   }
 
   // Title
-  ctx.fillStyle = isDark ? '#cbd5e1' : '#475569'
-  ctx.font = '600 11px Geist, sans-serif'
+  ctx.fillStyle = isDark ? '#cccccc' : '#333333'
+  ctx.font = '700 11px Helvetica Neue, Helvetica, Arial, sans-serif'
   ctx.textAlign = 'left'
   ctx.fillText(I18N.t('Response times'), pad.left, 14)
 
@@ -569,7 +569,7 @@ function drawChart(monId, state, hoverPoint = null) {
     // Vertical dashed guideline
     ctx.beginPath()
     ctx.setLineDash([3, 3])
-    ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.25)' : 'rgba(15, 23, 42, 0.15)'
+    ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.3)' : 'rgba(0, 0, 0, 0.2)'
     ctx.lineWidth = 1
     ctx.moveTo(hx, pad.top)
     ctx.lineTo(hx, pad.top + plotH)
@@ -579,14 +579,14 @@ function drawChart(monId, state, hoverPoint = null) {
     // Glowing outer circle
     ctx.beginPath()
     ctx.arc(hx, hy, 5.5, 0, 2 * Math.PI)
-    ctx.fillStyle = isDark ? 'rgba(100, 116, 139, 0.3)' : 'rgba(203, 213, 225, 0.4)'
+    ctx.fillStyle = isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.08)'
     ctx.fill()
 
     // Solid inner dot
     ctx.beginPath()
     ctx.arc(hx, hy, 3.5, 0, 2 * Math.PI)
     ctx.fillStyle = accentColor
-    ctx.strokeStyle = isDark ? '#090d16' : '#ffffff'
+    ctx.strokeStyle = isDark ? '#000000' : '#ffffff'
     ctx.lineWidth = 1.5
     ctx.fill()
     ctx.stroke()
