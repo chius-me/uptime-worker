@@ -38,28 +38,28 @@ const workerConfig: WorkerConfig = {
     },
     {
       id: 'vps1',
-      name: 'VPS in Qingdao',
+      name: 'Aliyun VPS',
       method: 'TCP_PING',
       // 通过 CF Secrets 传入环境变量 <VPS1_IP> 和 <VPS1_PORT>
       target: '<VPS1_IP>:<VPS1_PORT>',
-      tooltip: 'From Aliyun',
+      tooltip: 'Qingdao',
       timeout: 5000,
     },
     {
       id: 'vps2',
-      name: 'VPS in Oregon',
+      name: 'Google Cloud VPS I',
       method: 'TCP_PING',
       // 通过 CF Secrets 传入环境变量 <VPS2_IP> 和 <VPS2_PORT>
       target: '<VPS2_IP>:<VPS2_PORT>',
-      tooltip: 'From Google Cloud',
+      tooltip: 'Oregon',
       timeout: 5000,
     },
         {
       id: 'vps3',
-      name: 'VPS in Oregon',
+      name: 'Google Cloud VPS II',
       method: 'TCP_PING',
       target: '<VPS3_IP>:<VPS3_PORT>',
-      tooltip: 'From Google Cloud',
+      tooltip: 'Oregon',
       timeout: 5000,
     },
     // Custom proxies must be explicitly allowlisted. The Worker sends only a
