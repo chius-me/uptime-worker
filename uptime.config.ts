@@ -8,7 +8,7 @@ const pageConfig: PageConfig = {
     { link: 'https://github.com/chius-me/uptime-worker', label: 'GitHub', position: 'left', icon: 'github' },
     { link: 'mailto:contact@chius.cc', label: 'Email Me', position: 'right', highlight: true },
   ],
-  logo: '/logo.png',
+  logo: '/logo.svg',
 }
 
 const workerConfig: WorkerConfig = {
