@@ -12,6 +12,8 @@ The cron runs every minute. Query `https://<STATUS_HOST>/api/health` from outsid
 
 Absent state is `initializing`: it returns HTTP 503 with `monitoringStatus: "initializing"`, `updatedAt: 0`, and `stale: true`. A fresh timestamp is not sufficient for readiness: zero configured monitors, or any configured monitor without a persisted sample, also returns HTTP 503 with `monitoringStatus: "initializing"` and `stale: false`. HTTP 503 and `monitoringStatus: "delayed"` means the last state is older than 180 seconds. Corrupt or unreadable state returns HTTP 503 with `{"error":"State unavailable"}`. Alert on any non-200 response.
 
+If `/api/health` is current but the page shows an older check, compare `updatedAt` and the `Cache-Control` header on `/api/data` using the public hostname. `/api/data` should return `private, no-store`; the Worker keeps its own 30-second cache for fresh payloads. Exclude this endpoint from any Cloudflare rule that forces caching or overrides browser TTL. The page polls once a minute and updates the displayed age every second while visible.
+
 Set `HEARTBEAT_URL` with `npx wrangler secret put HEARTBEAT_URL`. Configure Healthchecks, Better Stack, or an equivalent external dead-man's switch to expect a ping every 1 minute with a 3-minute grace period. The Worker sends the HTTPS GET only after monitoring state and notification events have been persisted; a heartbeat proves that boundary was reached, not that monitored systems are healthy.
 
 ## Secrets and Telegram rotation

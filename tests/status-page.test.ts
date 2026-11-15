@@ -31,7 +31,7 @@ type UptimeRenderers = {
 
 const appPath = fileURLToPath(String(new URL('../static/js/app.js', import.meta.url)))
 const appShell = `<!doctype html><html><body>
-  <a class="nav-brand"></a>
+  <a class="nav-brand">Status</a>
   <div class="nav-controls"><div id="nav-links-left"></div>
   <button id="theme-toggle"></button><div id="nav-links-right"></div></div>
   <main id="main-content"></main><div id="footer-text"></div><div id="page-title"></div>
@@ -163,7 +163,7 @@ describe('status page monitoring state', () => {
       monitoringStatus: 'healthy',
       monitors: { api: { up: true, latency: 42, location: 'SFO', message: 'OK' } },
       config: {
-        title: 'Status',
+        title: 'An older API title',
         links: [
           { link: 'https://github.com/chius-me/uptime-worker', label: 'GitHub', position: 'left', icon: 'github' },
           { link: 'mailto:contact@chius.cc', label: 'Email Me', position: 'right', highlight: true },
@@ -422,11 +422,20 @@ describe('status page monitoring state', () => {
     expect(dom.window.document.querySelector('.overall-status')?.className).toContain('status-ok')
     expect(dom.window.document.body.textContent).toContain('Public API')
 
-    await vi.advanceTimersByTimeAsync(3 * 60_000)
+    expect(fetchImpl).toHaveBeenCalledWith('/api/data', expect.objectContaining({ cache: 'no-store' }))
+    const lastCheck = dom.window.document.querySelector('.status-subtitle time')
+    expect(lastCheck?.getAttribute('datetime')).toBe('2026-07-22T00:00:00.000Z')
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(dom.window.document.getElementById('last-check-age')?.textContent).toBe('1 second ago')
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(dom.window.document.querySelector('.status-subtitle time')).toBe(lastCheck)
+
+    await vi.advanceTimersByTimeAsync(3 * 60_000 - 1_000)
 
     expect(fetchImpl).toHaveBeenCalledTimes(4)
     expect(dom.window.document.querySelector('.overall-status')?.className).toContain('status-stale')
     expect(dom.window.document.body.textContent).toContain('Monitoring delayed')
+    expect(dom.window.document.getElementById('last-check-age')?.textContent).toBe('3 minutes ago')
     expect(dom.window.document.body.textContent).toContain('Public API')
     expect(dom.window.document.body.textContent).not.toContain('All systems operational')
     dom.window.close()
@@ -516,6 +525,7 @@ describe('status page monitoring state', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(5)
     expect(dom.window.document.querySelector('.overall-status')?.className).toContain('status-ok')
     expect(dom.window.document.body.textContent).toContain('All systems operational')
+    expect(dom.window.document.querySelector('.status-subtitle time')?.getAttribute('datetime')).toBe('2026-07-22T00:04:00.000Z')
     dom.window.close()
   })
 })

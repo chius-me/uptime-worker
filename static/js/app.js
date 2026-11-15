@@ -4,7 +4,6 @@
 let apiData = null   // from /api/data
 let lastRenderedState = ''  // track status state to skip unnecessary re-renders
 let lastSuccessfulFetchAt = 0
-let freshnessTimer = null
 let refreshInProgress = false
 
 // ── SVG Icons ────────────────────────────────────
@@ -39,11 +38,10 @@ async function fetchStatus() {
   const controller = new AbortController()
   const requestTimeout = setTimeout(() => controller.abort(), 55000)
   try {
-    const resp = await fetch('/api/data', { signal: controller.signal })
+    const resp = await fetch('/api/data', { cache: 'no-store', signal: controller.signal })
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
     apiData = await resp.json()
     lastSuccessfulFetchAt = Math.round(Date.now() / 1000)
-    scheduleFreshnessRender()
     return true
   } catch (err) {
     console.error('Failed to fetch status:', err)
@@ -78,10 +76,6 @@ async function render() {
   if (!apiData) return
 
   const cfg = apiData.config
-  document.getElementById('page-title').textContent = cfg.title || 'UptimeWorker'
-  document.querySelector('.nav-brand').innerHTML = cfg.logo
-    ? `<img src="${esc(cfg.logo)}" width="32" height="32" alt=""><span>${esc(cfg.title || 'UptimeWorker')}</span>`
-    : esc(cfg.title || 'UptimeWorker')
 
   // Nav links
   const renderNavLink = link => {
@@ -171,23 +165,23 @@ function renderStateKey(data) {
   return [data.updatedAt, data.monitoringStatus, data.stale, monitoringStatusForRender(data)].join(':')
 }
 
-function scheduleFreshnessRender() {
-  if (freshnessTimer) clearTimeout(freshnessTimer)
-  const successfulFetchAt = lastSuccessfulFetchAt
-  freshnessTimer = setTimeout(() => {
-    if (!apiData || lastSuccessfulFetchAt !== successfulFetchAt) return
-    if (renderStateKey(apiData) !== lastRenderedState) render()
-  }, 180000)
+const relativeTime = new Intl.RelativeTimeFormat('en')
+
+function checkAge(updatedAt) {
+  const seconds = Math.max(0, Math.floor(Date.now() / 1000) - updatedAt)
+  if (seconds >= 86400) return relativeTime.format(-Math.floor(seconds / 86400), 'day')
+  if (seconds >= 3600) return relativeTime.format(-Math.floor(seconds / 3600), 'hour')
+  if (seconds >= 60) return relativeTime.format(-Math.floor(seconds / 60), 'minute')
+  return relativeTime.format(-seconds, 'second')
 }
 
 function renderStatusPageHtml(data) {
   const { updatedAt, monitors, maintenances, state, monitorsConfig, config } = data
   const monitoringStatus = monitoringStatusForRender(data)
   const status = overallStatus({ ...data, monitoringStatus })
-  const nowSec = Math.round(Date.now() / 1000)
-  const secondsAgo = updatedAt ? Math.max(0, nowSec - updatedAt) : 0
+  const checkDate = new Date(updatedAt * 1000)
   const lastCheck = updatedAt
-    ? `${new Date(updatedAt * 1000).toLocaleString()} (${secondsAgo}s ago)`
+    ? `<time datetime="${checkDate.toISOString()}">${esc(checkDate.toLocaleString())}</time> (<span id="last-check-age" aria-live="off">${esc(checkAge(updatedAt))}</span>)`
     : I18N.t('Unknown')
 
   let html = `<section class="overall-status ${status.cssClass}">
@@ -788,18 +782,24 @@ function setupThemeToggle() {
 }
 
 // ── Auto-refresh ─────────────────────────────────
-let refreshTimer = null
 async function refreshVisiblePage() {
   if (document.hidden) return
+  updateVisibleStatus()
   await fetchStatus()
-  if (apiData && renderStateKey(apiData) !== lastRenderedState) {
-    render()
-  }
+  updateVisibleStatus()
 }
 
-function startAutoRefresh() {
-  if (refreshTimer) clearInterval(refreshTimer)
-  refreshTimer = setInterval(refreshVisiblePage, 60000)
+function updateVisibleStatus() {
+  if (document.hidden || !apiData) return
+  if (renderStateKey(apiData) !== lastRenderedState) {
+    render()
+    return
+  }
+  const age = document.getElementById('last-check-age')
+  if (age) {
+    const text = checkAge(apiData.updatedAt)
+    if (age.textContent !== text) age.textContent = text
+  }
 }
 
 // ── Resize ────────────────────────────────────────
@@ -833,5 +833,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) void refreshVisiblePage()
   })
-  startAutoRefresh()
+  setInterval(refreshVisiblePage, 60000)
+  setInterval(updateVisibleStatus, 1000)
 })

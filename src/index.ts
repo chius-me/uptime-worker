@@ -54,7 +54,7 @@ export default {
     }
 
     if (url.pathname === '/api/data') {
-      return withSecurityHeaders(await handleDataAPI(env, ctx))
+      return withSecurityHeaders(withoutPublicCaching(await handleDataAPI(env, ctx)))
     }
     if (url.pathname === '/api/badge') {
       return withSecurityHeaders(await handleBadgeAPI(request, env))
@@ -65,12 +65,20 @@ export default {
 
     // 非 API 路径 → Workers Static Assets（SPA）
     // 如果 assets 找不到匹配文件（SPA 前端路由 fallback），返回 index.html
-    const asset = await env.ASSETS.fetch(request)
+    const expectsShell = url.pathname === '/' || url.pathname === '/index.html' ||
+      request.headers.get('Sec-Fetch-Mode') === 'navigate'
+    const asset = await env.ASSETS.fetch(expectsShell && (request.method === 'GET' || request.method === 'HEAD')
+      ? shellRequest(request)
+      : request)
     if (asset.status === 404) {
       // SPA 回退：让前端 hash routing 处理
-      return withSecurityHeaders(await env.ASSETS.fetch(new Request(new URL('/index.html', request.url), request)))
+      const fallbackUrl = new URL('/index.html', request.url).href
+      const fallback = await env.ASSETS.fetch(request.method === 'GET' || request.method === 'HEAD'
+        ? shellRequest(request, fallbackUrl)
+        : new Request(fallbackUrl, request))
+      return withSecurityHeaders(renderPageShell(fallback))
     }
-    return withSecurityHeaders(asset)
+    return withSecurityHeaders(renderPageShell(asset))
   },
 
   async scheduled(event: ScheduledEvent, env: Env, _ctx: ExecutionContext): Promise<void> {
@@ -115,6 +123,38 @@ const jsonHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
+}
+
+// Keep the short Worker cache separate from the response browsers and CDNs see.
+function withoutPublicCaching(response: Response): Response {
+  const headers = new Headers(response.headers)
+  headers.set('Cache-Control', 'private, no-store')
+  headers.set('Cloudflare-CDN-Cache-Control', 'no-store')
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
+}
+
+function renderPageShell(asset: Response): Response {
+  if (asset.status !== 200 || !asset.headers.get('Content-Type')?.startsWith('text/html')) return asset
+
+  const title = pageConfig.title || 'UptimeWorker'
+  const { logo } = pageConfig
+  const html = new HTMLRewriter()
+    .on('#page-title, #nav-brand-title', { element: (element) => { element.setInnerContent(title) } })
+    .on('#nav-brand-logo', { element: (element) => {
+      if (logo) element.setAttribute('src', logo)
+      else element.remove()
+    } })
+    .transform(asset)
+  html.headers.delete('ETag')
+  html.headers.delete('Last-Modified')
+  return withoutPublicCaching(html)
+}
+
+function shellRequest(request: Request, url = request.url): Request {
+  const headers = new Headers(request.headers)
+  // The static asset's validators do not include the configured page branding.
+  for (const name of ['If-None-Match', 'If-Modified-Since', 'Range']) headers.delete(name)
+  return new Request(url, { method: request.method, headers })
 }
 
 async function handleDataAPI(env: Env, ctx: ExecutionContext): Promise<Response> {

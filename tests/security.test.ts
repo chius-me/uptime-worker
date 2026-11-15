@@ -133,7 +133,7 @@ describe('worker security boundary', () => {
 
       for (const response of responses) {
         expect(response.status).toBe(503)
-        expect(response.headers.get('cache-control')).toBe('no-store')
+        expect(response.headers.get('cache-control')).toMatch(/(?:^|,\s*)no-store(?:,|$)/)
         expectSecurityHeaders(response)
         await expect(response.json()).resolves.toEqual({ error: 'State unavailable' })
       }
@@ -165,7 +165,7 @@ describe('worker security boundary', () => {
       ])
       for (const response of responses) {
         expect(response.status).toBe(503)
-        expect(response.headers.get('cache-control')).toBe('no-store')
+        expect(response.headers.get('cache-control')).toMatch(/(?:^|,\s*)no-store(?:,|$)/)
         expectSecurityHeaders(response)
         await expect(response.json()).resolves.toEqual({ error: 'State unavailable' })
       }
@@ -221,29 +221,20 @@ describe('worker security boundary', () => {
     }
   })
 
-  it('adds security headers to static assets and explicit SPA fallbacks', async () => {
+  it('adds security headers to static assets without changing their cache policy', async () => {
     workerConfig.passwordProtection = undefined
     const requestedPaths: string[] = []
     const env = envWithAssets(async (request) => {
         requestedPaths.push(new URL(request.url).pathname)
-        if (new URL(request.url).pathname === '/dashboard') return new Response('missing', { status: 404 })
-        if (new URL(request.url).pathname === '/index.html') {
-          return new Response('<!doctype html>', { headers: { 'Content-Type': 'text/html' } })
-        }
         return new Response('body {}', {
           headers: { 'Content-Type': 'text/css', 'Cache-Control': 'public, max-age=60' },
         })
       })
     const directAsset = await worker.fetch(new Request('https://status.example.test/css/style.css'), env, ctx)
-    const fallback = await worker.fetch(new Request('https://status.example.test/dashboard'), env, ctx)
-
-    expect(requestedPaths).toEqual(['/css/style.css', '/dashboard', '/index.html'])
+    expect(requestedPaths).toEqual(['/css/style.css'])
     expect(directAsset.headers.get('content-type')).toBe('text/css')
     expect(directAsset.headers.get('cache-control')).toBe('public, max-age=60')
-    expect(fallback.status).toBe(200)
-    expect(fallback.headers.get('content-type')).toBe('text/html')
     expectSecurityHeaders(directAsset)
-    expectSecurityHeaders(fallback)
   })
 
   it('does not rely on inline event handlers for upcoming maintenance', async () => {

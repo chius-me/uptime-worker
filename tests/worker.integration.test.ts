@@ -4,7 +4,7 @@ import worker, { type Env } from '../src/index'
 import { persistRun, runMonitoring } from '../src/run-monitoring'
 import { dispatchPendingNotifications } from '../src/scheduler'
 import { CompactedMonitorStateWrapper, CorruptStateError, getFromStore, setToStore, stateWriteStatements } from '../src/store'
-import { workerConfig } from '../uptime.config'
+import { pageConfig, workerConfig } from '../uptime.config'
 
 type IntegrationEnv = Env & {
   TEST_MIGRATIONS: D1Migration[]
@@ -131,7 +131,37 @@ describe('Worker runtime integration', () => {
     const response = await SELF.fetch('https://example.test/api/data')
 
     expect(response.status).toBe(200)
+    expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     await expect(response.json()).resolves.toMatchObject({ monitoringStatus: 'initializing' })
+  })
+
+  it('renders branding in the initial HTML on reloads and SPA fallback routes', async () => {
+    const { title, logo } = pageConfig
+    try {
+      const original = await testEnv.ASSETS.fetch(new Request('https://example.test/'))
+      const etag = original.headers.get('ETag')
+      expect(etag).toBeTruthy()
+      await original.body?.cancel()
+      pageConfig.title = 'Status <em>&</em>'
+      pageConfig.logo = '/logo.svg'
+
+      for (const path of ['/', '/dashboard']) {
+        const response = await SELF.fetch(`https://example.test${path}`, {
+          headers: { 'If-None-Match': etag!, 'Sec-Fetch-Mode': 'navigate' },
+        })
+        expect(response.status).toBe(200)
+        expect(response.headers.get('ETag')).toBeNull()
+        expect(response.headers.get('Cache-Control')).toBe('private, no-store')
+        expect(response.headers.get('Content-Security-Policy')).toContain("script-src 'self'")
+        const html = await response.text()
+        expect(html).toContain('<title id="page-title">Status &lt;em&gt;&amp;&lt;/em&gt;</title>')
+        expect(html).toContain('<span id="nav-brand-title">Status &lt;em&gt;&amp;&lt;/em&gt;</span>')
+        expect(html).toMatch(/<img id="nav-brand-logo"[^>]*src="\/logo\.svg"/)
+      }
+    } finally {
+      pageConfig.title = title
+      pageConfig.logo = logo
+    }
   })
 
   it('protects static assets before passing them to the ASSETS binding', async () => {
