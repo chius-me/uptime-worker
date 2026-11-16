@@ -164,6 +164,12 @@ describe('Worker runtime integration', () => {
     }
   })
 
+  it('handles HEAD requests for static assets and page shell', async () => {
+    const headResponse = await SELF.fetch('https://example.test/', { method: 'HEAD' })
+    expect(headResponse.status).toBe(200)
+    expect(headResponse.headers.get('Content-Type')).toContain('text/html')
+  })
+
   it('protects static assets before passing them to the ASSETS binding', async () => {
     workerConfig.passwordProtection = 'member:secret'
 

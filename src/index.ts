@@ -135,6 +135,12 @@ function withoutPublicCaching(response: Response): Response {
 
 function renderPageShell(asset: Response): Response {
   if (asset.status !== 200 || !asset.headers.get('Content-Type')?.startsWith('text/html')) return asset
+  if (!asset.body) {
+    const headers = new Headers(asset.headers)
+    headers.delete('ETag')
+    headers.delete('Last-Modified')
+    return withoutPublicCaching(new Response(null, { status: asset.status, statusText: asset.statusText, headers }))
+  }
 
   const title = pageConfig.title || 'UptimeWorker'
   const { logo } = pageConfig
@@ -145,9 +151,10 @@ function renderPageShell(asset: Response): Response {
       else element.remove()
     } })
     .transform(asset)
-  html.headers.delete('ETag')
-  html.headers.delete('Last-Modified')
-  return withoutPublicCaching(html)
+  const headers = new Headers(html.headers)
+  headers.delete('ETag')
+  headers.delete('Last-Modified')
+  return withoutPublicCaching(new Response(html.body, { status: html.status, statusText: html.statusText, headers }))
 }
 
 function shellRequest(request: Request, url = request.url): Request {
