@@ -62,6 +62,14 @@ const workerConfig: WorkerConfig = {
       tooltip: 'Oregon',
       timeout: 5000,
     },
+        {
+      id: 'vps4',
+      name: 'RarkNerd VPS',
+      method: 'TCP_PING',
+      target: '<VPS4_IP>:<VPS4_PORT>',
+      tooltip: 'San Jose',
+      timeout: 5000,
+    },
     // Custom proxies must be explicitly allowlisted. The Worker sends only a
     // monitor DTO; never add Authorization or Cookie to forwardHeaders here.
     // {
