@@ -165,7 +165,7 @@ describe('status page monitoring state', () => {
       config: {
         title: 'An older API title',
         links: [
-          { link: 'https://github.com/chius-me/uptime-worker', label: 'GitHub', position: 'left', icon: 'github' },
+          { link: 'https://github.com/chius-n/uptime-worker', label: 'GitHub', position: 'left', icon: 'github' },
           { link: 'mailto:contact@chius.cc', label: 'Email Me', position: 'right', highlight: true },
         ],
       },
@@ -189,7 +189,7 @@ describe('status page monitoring state', () => {
       'nav-links-right',
     ])
     expect(github?.getAttribute('aria-label')).toBe('GitHub')
-    expect(github?.getAttribute('href')).toBe('https://github.com/chius-me/uptime-worker')
+    expect(github?.getAttribute('href')).toBe('https://github.com/chius-n/uptime-worker')
     expect(github?.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
     expect(github?.textContent).toBe('')
     expect(email?.textContent).toBe('Email Me')
